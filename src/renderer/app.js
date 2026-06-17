@@ -358,6 +358,25 @@ $("magnetInput").addEventListener("keydown", (e) => {
 });
 $("btnOpenFile").addEventListener("click", openFile);
 $("btnOpenFolder").addEventListener("click", openFolder);
+$("btnSetDefault").addEventListener("click", async () => {
+  try {
+    const res = await rojoAPI.setAsDefault();
+    if (res.magnet) {
+      showToast("Set as default for magnet links");
+    } else {
+      showToast("Failed to set default for magnet links", "error");
+    }
+    if (res.torrent === true) {
+      showToast("Set as default for .torrent files");
+    } else if (res.torrent === "manual") {
+      showToast("For .torrent files: right-click → Get Info → Open With → Change All");
+    } else if (res.torrent === false) {
+      showToast("Failed to set default for .torrent files", "error");
+    }
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+});
 
 // Close modal on backdrop click
 $("magnetModal").querySelector(".modal-backdrop").addEventListener("click", closeModal);

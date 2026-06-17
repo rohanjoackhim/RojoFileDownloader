@@ -457,6 +457,33 @@ ipcMain.handle("get-download-path", () => {
   return lastDownloadPath;
 });
 
+ipcMain.handle("set-as-default", () => {
+  const magnetOk = app.setAsDefaultProtocolClient("magnet");
+  const results = { magnet: magnetOk };
+
+  // On Windows, also try to register .torrent file association
+  if (process.platform === "win32") {
+    try {
+      const { execSync } = require("child_process");
+      const appPath = process.execPath;
+      // Register .torrent extension
+      execSync(`reg add "HKEY_CURRENT_USER\\Software\\Classes\\.torrent" /ve /d "RojoTorrent" /f`);
+      execSync(`reg add "HKEY_CURRENT_USER\\Software\\Classes\\RojoTorrent\\shell\\open\\command" /ve /d "\\"${appPath}\\" \"%1\\"" /f`);
+      results.torrent = true;
+    } catch (e) {
+      console.warn("[RO^JO] Failed to register .torrent on Windows:", e.message);
+      results.torrent = false;
+      results.torrentError = e.message;
+    }
+  } else {
+    // On macOS/Linux, file associations are handled via Info.plist / .desktop files.
+    // The app already declares them in package.json build config.
+    results.torrent = "manual";
+  }
+
+  return results;
+});
+
 // ---------- VPN IPC ----------
 const VPN_CONFIG_PATH_ROJO = () => path.join(app.getPath("userData"), "rojo-wireguard.conf");
 
