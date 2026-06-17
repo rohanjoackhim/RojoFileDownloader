@@ -125,9 +125,9 @@ html, body {
 }
 
 .app-logo {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: 84px;
+  height: 84px;
+  border-radius: 12px;
   object-fit: contain;
   -webkit-app-region: no-drag;
 }
