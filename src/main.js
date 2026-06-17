@@ -192,7 +192,7 @@ async function initWebTorrent() {
       entry.length = t.length;
       entry.timeRemaining = t.timeRemaining || 0;
       entry.ratio = t.downloaded > 0 ? (t.uploaded || 0) / t.downloaded : 0;
-      entry.status = t.done ? "completed" : t.paused ? "paused" : "downloading";
+      if (t.done) entry.status = "completed";
       list.push({ ...entry });
     }
     broadcast("torrents-updated", {
@@ -245,6 +245,8 @@ async function handleAddMagnet(magnetUri) {
       });
 
       torrent.on("done", () => {
+        const entry = activeTorrents.get(torrent.infoHash);
+        if (entry) entry.status = "completed";
         broadcast("torrent-completed", { infoHash: torrent.infoHash, name: torrent.name });
       });
 
@@ -299,6 +301,8 @@ async function handleAddTorrentFile(buffer) {
       });
 
       torrent.on("done", () => {
+        const entry = activeTorrents.get(torrent.infoHash);
+        if (entry) entry.status = "completed";
         broadcast("torrent-completed", { infoHash: torrent.infoHash, name: torrent.name });
       });
 
@@ -332,7 +336,10 @@ function pauseTorrent(infoHash) {
   if (!client) return { ok: false, error: "Engine not ready" };
   const torrent = client.get(infoHash);
   if (!torrent) return { ok: false, error: "Torrent not found" };
+  // WebTorrent pause doesn't always fully stop connections,
+  // so we also set maxConns to 0 to force zero new piece requests.
   torrent.pause();
+  torrent.maxConns = 0;
   const entry = activeTorrents.get(infoHash);
   if (entry) entry.status = "paused";
   return { ok: true };
@@ -343,6 +350,7 @@ function resumeTorrent(infoHash) {
   const torrent = client.get(infoHash);
   if (!torrent) return { ok: false, error: "Torrent not found" };
   torrent.resume();
+  torrent.maxConns = 100; // restore per-torrent connections
   const entry = activeTorrents.get(infoHash);
   if (entry) entry.status = "downloading";
   return { ok: true };
