@@ -119,6 +119,7 @@ function renderTorrents() {
         actionButtons += `<button class="btn-small btn-pause" onclick="event.stopPropagation(); pauseTorrent('${t.infoHash}')">Pause</button>`;
       }
     }
+    actionButtons += `<button class="btn-small btn-folder" onclick="event.stopPropagation(); openTorrentFolder('${t.infoHash}')" title="Open folder">\u{1F4C1}</button>`;
     actionButtons += `<button class="btn-small btn-remove" onclick="event.stopPropagation(); removeTorrent('${t.infoHash}')">Remove</button>`;
     actionButtons += `<button class="btn-small btn-delete-files" onclick="event.stopPropagation(); deleteWithFiles('${t.infoHash}')">Delete</button>`;
 
@@ -255,6 +256,12 @@ async function openFile() {
 
 async function openFolder() {
   await rojoAPI.openFolder();
+}
+
+async function openTorrentFolder(infoHash) {
+  const t = torrents.find((x) => x.infoHash === infoHash);
+  if (!t || !t.path) return;
+  await rojoAPI.openTorrentFolder(t.path);
 }
 
 // ---------- Window Controls ----------
