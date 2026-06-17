@@ -119,15 +119,17 @@ html, body {
 
 .toolbar-left {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
   -webkit-app-region: no-drag;
 }
 
-.app-title {
-  font-size: 1.1rem;
-  font-weight: 700;
-  letter-spacing: -0.5px;
+.app-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: contain;
+  -webkit-app-region: no-drag;
 }
 
 .app-tagline {
