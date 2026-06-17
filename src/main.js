@@ -186,89 +186,109 @@ async function initWebTorrent() {
 async function handleAddMagnet(magnetUri) {
   if (!client) return { ok: false, error: "Engine not ready" };
 
-  const downloadPath = await selectDownloadPath();
-  if (!downloadPath) return { ok: false, error: "Download path not selected" };
+  try {
+    const downloadPath = await selectDownloadPath();
+    if (!downloadPath) return { ok: false, error: "Download path not selected" };
 
-  return new Promise((resolve) => {
-    let responded = false;
-    const torrent = client.add(magnetUri, {
-      path: downloadPath,
-      announce: ROJO_CONFIG.announce,
-    }, (t) => {
-      activeTorrents.set(t.infoHash, {
-        name: t.name,
-        infoHash: t.infoHash,
-        progress: 0,
-        speed: 0,
-        peers: 0,
-        status: "downloading",
-        path: path.join(downloadPath, t.name),
-        addedAt: Date.now(),
-        downloaded: 0,
-        length: t.length || 0,
-      });
-      if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: t.name }); }
-    });
-
-    torrent.on("error", (err) => {
-      if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
-    });
-
-    torrent.on("done", () => {
-      broadcast("torrent-completed", { infoHash: torrent.infoHash, name: torrent.name });
-    });
-
-    setTimeout(() => {
-      if (!responded) {
-        responded = true;
-        resolve({ ok: false, error: "Timed out waiting for torrent metadata. Your ISP may block DHT/trackers." });
+    return new Promise((resolve) => {
+      let responded = false;
+      let torrent;
+      try {
+        torrent = client.add(magnetUri, {
+          path: downloadPath,
+          announce: ROJO_CONFIG.announce,
+        }, (t) => {
+          activeTorrents.set(t.infoHash, {
+            name: t.name,
+            infoHash: t.infoHash,
+            progress: 0,
+            speed: 0,
+            peers: 0,
+            status: "downloading",
+            path: path.join(downloadPath, t.name),
+            addedAt: Date.now(),
+            downloaded: 0,
+            length: t.length || 0,
+          });
+          if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: t.name }); }
+        });
+      } catch (err) {
+        if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
+        return;
       }
-    }, 25000);
-  });
+
+      torrent.on("error", (err) => {
+        if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
+      });
+
+      torrent.on("done", () => {
+        broadcast("torrent-completed", { infoHash: torrent.infoHash, name: torrent.name });
+      });
+
+      setTimeout(() => {
+        if (!responded) {
+          responded = true;
+          resolve({ ok: false, error: "Timed out waiting for torrent metadata. Your ISP may block DHT/trackers." });
+        }
+      }, 25000);
+    });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 }
 
 async function handleAddTorrentFile(buffer) {
   if (!client) return { ok: false, error: "Engine not ready" };
 
-  const downloadPath = await selectDownloadPath();
-  if (!downloadPath) return { ok: false, error: "Download path not selected" };
+  try {
+    const downloadPath = await selectDownloadPath();
+    if (!downloadPath) return { ok: false, error: "Download path not selected" };
 
-  return new Promise((resolve) => {
-    let responded = false;
-    const torrent = client.add(buffer, {
-      path: downloadPath,
-      announce: ROJO_CONFIG.announce,
-    }, (t) => {
-      activeTorrents.set(t.infoHash, {
-        name: t.name,
-        infoHash: t.infoHash,
-        progress: 0,
-        speed: 0,
-        peers: 0,
-        status: "downloading",
-        path: path.join(downloadPath, t.name),
-        addedAt: Date.now(),
-        downloaded: 0,
-        length: t.length || 0,
-      });
-      if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: t.name }); }
-    });
-
-    torrent.on("error", (err) => {
-      if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
-    });
-
-    torrent.on("done", () => {
-      broadcast("torrent-completed", { infoHash: torrent.infoHash, name: torrent.name });
-    });
-
-    setTimeout(() => {
-      if (!responded) {
-        responded = true;
-        resolve({ ok: false, error: "Timed out waiting for torrent metadata" });
+    return new Promise((resolve) => {
+      let responded = false;
+      let torrent;
+      try {
+        torrent = client.add(buffer, {
+          path: downloadPath,
+          announce: ROJO_CONFIG.announce,
+        }, (t) => {
+          activeTorrents.set(t.infoHash, {
+            name: t.name,
+            infoHash: t.infoHash,
+            progress: 0,
+            speed: 0,
+            peers: 0,
+            status: "downloading",
+            path: path.join(downloadPath, t.name),
+            addedAt: Date.now(),
+            downloaded: 0,
+            length: t.length || 0,
+          });
+          if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: t.name }); }
+        });
+      } catch (err) {
+        if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
+        return;
       }
-    }, 25000);
-  });
+
+      torrent.on("error", (err) => {
+        if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
+      });
+
+      torrent.on("done", () => {
+        broadcast("torrent-completed", { infoHash: torrent.infoHash, name: torrent.name });
+      });
+
+      setTimeout(() => {
+        if (!responded) {
+          responded = true;
+          resolve({ ok: false, error: "Timed out waiting for torrent metadata" });
+        }
+      }, 25000);
+    });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 }
 
 function removeTorrent(infoHash, deleteFiles = false) {
@@ -315,10 +335,12 @@ function broadcast(channel, data) {
 
 ipcMain.handle("window-minimize", () => {
   if (win) win.minimize();
+  return null;
 });
 
 ipcMain.handle("window-close", () => {
   if (win) win.close();
+  return null;
 });
 
 ipcMain.handle("add-magnet", async (_event, magnet) => {
@@ -344,10 +366,12 @@ ipcMain.handle("resume-torrent", async (_event, infoHash) => {
 
 ipcMain.handle("open-folder", async () => {
   shell.openPath(lastDownloadPath);
+  return null;
 });
 
 ipcMain.handle("open-torrent-folder", async (_event, folderPath) => {
   shell.openPath(folderPath);
+  return null;
 });
 
 ipcMain.handle("select-file", async () => {
