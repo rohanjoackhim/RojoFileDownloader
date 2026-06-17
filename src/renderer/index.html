@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';">
+  <title>RO^JO</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Custom Title Bar -->
+    <div class="title-bar">
+      <div class="title-bar-left">
+        <h1 class="title-bar-brand">RO^JO</h1>
+        <span class="title-bar-tagline">Torrent Downloader</span>
+      </div>
+      <div class="title-bar-controls">
+        <button class="title-bar-btn" id="btnMinimize" title="Minimize">
+          <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1" y="5.5" width="10" height="1" fill="currentColor"/></svg>
+        </button>
+        <button class="title-bar-btn title-bar-close" id="btnClose" title="Close">
+          <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 2l8 8M2 10l8-8" stroke="currentColor" stroke-width="1.2"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <header class="toolbar">
+      <div class="toolbar-left">
+        <h1 class="app-title">RO^JO</h1>
+        <span class="app-tagline">Fast & Minimal</span>
+      </div>
+      <div class="toolbar-actions">
+        <button class="btn btn-primary" id="btnAddMagnet" title="Add magnet link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+          <span>Add Magnet</span>
+        </button>
+        <button class="btn btn-secondary" id="btnOpenFile" title="Open .torrent file">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+          <span>Open File</span>
+        </button>
+        <button class="btn btn-secondary" id="btnOpenFolder" title="Open downloads folder">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="content">
+      <div id="dropZone" class="drop-zone">
+        <div class="drop-zone-content">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <p>Drag & drop a .torrent file or magnet link here</p>
+        </div>
+      </div>
+
+      <div id="torrentList" class="torrent-list"></div>
+
+      <div id="emptyState" class="empty-state">
+        <p>No torrents yet</p>
+        <p class="hint">Add a magnet link or open a .torrent file to start downloading</p>
+      </div>
+
+      <!-- Detail Panel for selected torrent -->
+      <div id="detailPanel" class="detail-panel" style="display:none;">
+        <div class="detail-header">
+          <div class="detail-name" id="detailName">--</div>
+          <div class="detail-size" id="detailSize">--</div>
+        </div>
+        <div class="detail-bar-wrap">
+          <div class="battery-bar">
+            <div class="battery-body">
+              <div class="battery-fill" id="batteryFill" style="width:0%"></div>
+            </div>
+            <div class="battery-cap"></div>
+          </div>
+          <span class="detail-pct" id="detailPct">0%</span>
+        </div>
+        <div class="detail-status" id="detailStatus">--</div>
+        <div class="detail-meta">
+          <span id="detailPeers">0 peers</span>
+          <span id="detailDown">0 B/s</span>
+          <span id="detailUp">0 B/s</span>
+          <span id="detailEta">--</span>
+          <span id="detailRatio">Ratio: 0.00</span>
+        </div>
+      </div>
+    </main>
+
+    <footer class="status-bar">
+      <div class="status-left">
+        <span id="statusText">Ready</span>
+      </div>
+      <div class="status-right">
+        <span id="downSpeed">0 B/s</span>
+        <span class="sep">/</span>
+        <span id="upSpeed">0 B/s</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Magnet Dialog -->
+  <div id="magnetModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <h3>Add Magnet Link</h3>
+      <input type="text" id="magnetInput" placeholder="magnet:?xt=urn:btih:..." autofocus>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btnCancelMagnet">Cancel</button>
+        <button class="btn btn-primary" id="btnConfirmMagnet">Add</button>
+      </div>
+      <div id="magnetError" class="error-msg"></div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

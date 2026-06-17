@@ -1,0 +1,73 @@
+{
+  "name": "rojo",
+  "productName": "RO^JO",
+  "version": "1.0.0",
+  "description": "Fast, minimal BitTorrent client",
+  "main": "src/main.js",
+  "author": "Rojo",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "com.rojo.torrent",
+    "productName": "Rojo",
+    "directories": {
+      "output": "dist"
+    },
+    "npmRebuild": false,
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "node_modules/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "icon": "assets/icon.icns"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64", "ia32"]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "fileAssociations": [
+      {
+        "ext": "torrent",
+        "name": "Torrent File",
+        "role": "Editor"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "BitTorrent Magnet Link",
+        "schemes": ["magnet"]
+      }
+    ]
+  },
+  "dependencies": {
+    "webtorrent": "^2.4.29"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  }
+}
