@@ -42,6 +42,10 @@
         <button class="btn btn-secondary" id="btnOpenFolder" title="Open downloads folder">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         </button>
+        <button class="btn btn-vpn" id="btnVpnToggle" title="VPN — hide traffic from ISP">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <span>VPN</span>
+        </button>
       </div>
     </header>
 
@@ -89,6 +93,10 @@
     <footer class="status-bar">
       <div class="status-left">
         <span id="statusText">Ready</span>
+        <span class="vpn-status" id="vpnStatus" style="display:none;">
+          <span class="vpn-dot"></span>
+          <span id="vpnLabel">VPN</span>
+        </span>
       </div>
       <div class="status-right">
         <span id="downSpeed">0 B/s</span>
@@ -96,6 +104,24 @@
         <span id="upSpeed">0 B/s</span>
       </div>
     </footer>
+  </div>
+
+  <!-- VPN Settings Modal -->
+  <div id="vpnModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-content--wide">
+      <h3>WireGuard VPN</h3>
+      <p class="modal-hint">Paste your WireGuard config below to hide torrent traffic from your ISP.</p>
+      <textarea id="vpnConfigInput" rows="10" placeholder="[Interface]\nPrivateKey = ...\nAddress = 10.0.0.2/24\nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = ...\nAllowedIPs = 0.0.0.0/0\nEndpoint = vpn.example.com:51820\nPersistentKeepalive = 25"></textarea>
+      <div id="vpnError" class="error-msg"></div>
+      <div id="vpnSuccess" class="success-msg"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btnVpnCancel">Close</button>
+        <button class="btn btn-ghost" id="btnVpnTest">Test</button>
+        <button class="btn btn-danger" id="btnVpnDisconnect">Disconnect</button>
+        <button class="btn btn-primary" id="btnVpnConnect">Connect</button>
+      </div>
+    </div>
   </div>
 
   <!-- Magnet Dialog -->

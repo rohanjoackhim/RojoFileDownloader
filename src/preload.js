@@ -18,6 +18,14 @@ contextBridge.exposeInMainWorld("rojoAPI", {
   selectFile: () => ipcRenderer.invoke("select-file"),
   getDownloadPath: () => ipcRenderer.invoke("get-download-path"),
 
+  // VPN
+  vpnStatus: () => ipcRenderer.invoke("vpn-status"),
+  vpnConnect: (configText, splitTunnelHosts) => ipcRenderer.invoke("vpn-connect", configText, splitTunnelHosts),
+  vpnDisconnect: () => ipcRenderer.invoke("vpn-disconnect"),
+  vpnTest: (url) => ipcRenderer.invoke("vpn-test", url),
+  vpnSaveConfig: (configText) => ipcRenderer.invoke("vpn-save-config", configText),
+  vpnLoadConfig: () => ipcRenderer.invoke("vpn-load-config"),
+
   // Event listeners
   onTorrentsUpdated: (callback) => {
     ipcRenderer.on("torrents-updated", (_event, data) => callback(data));

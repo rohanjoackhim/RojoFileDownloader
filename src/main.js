@@ -3,6 +3,16 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 
+// Import existing VPN module from parent project
+let vpn;
+try {
+  vpn = require("../../electron/vpn/index.cjs");
+  console.log("[RO^JO] VPN module loaded successfully");
+} catch (e) {
+  console.warn("[RO^JO] VPN module not available:", e.message);
+  vpn = null;
+}
+
 // ---------- Config ----------
 const DEFAULT_DOWNLOAD_DIR = path.join(os.homedir(), "Downloads", "RO^JO");
 if (!fs.existsSync(DEFAULT_DOWNLOAD_DIR)) {
@@ -14,10 +24,11 @@ const ROJO_CONFIG = {
   dht: true,
   tracker: true,
   webSeeds: true,
-  maxConns: 500,
+  maxConns: 1000,
   defaultDownloadPath: DEFAULT_DOWNLOAD_DIR,
-  // Additional tracker list for better peer discovery
+  // Comprehensive tracker list for best peer discovery
   announce: [
+    // UDP trackers (fastest)
     "udp://tracker.opentrackr.org:1337",
     "udp://tracker.openbittorrent.com:80",
     "udp://opentracker.i2p.rocks:6969",
@@ -25,8 +36,20 @@ const ROJO_CONFIG = {
     "udp://open.stealth.si:80",
     "udp://tracker.tiny-vps.com:6969",
     "udp://tracker.moeking.me:6969",
+    "udp://tracker-udp.gbitt.info:80",
+    "udp://tracker.0x.tf:1337",
+    "udp://p4p.arenabg.com:1337",
+    "udp://exodus.desync.com:6969",
+    "udp://9.rarbg.com:2810",
+    "udp://opentor.net:6969",
+    // HTTP trackers
     "http://tracker.opentrackr.org:1337/announce",
     "http://tracker.openbittorrent.com:80/announce",
+    "http://tracker.gbitt.info:80/announce",
+    "http://bt.okmp.org:2710/announce",
+    // WebTorrent / WSS trackers
+    "wss://tracker.openwebtorrent.com",
+    "wss://tracker.files.fm:7073",
   ],
 };
 
@@ -387,6 +410,71 @@ ipcMain.handle("select-file", async () => {
 
 ipcMain.handle("get-download-path", () => {
   return lastDownloadPath;
+});
+
+// ---------- VPN IPC ----------
+const VPN_CONFIG_PATH_ROJO = () => path.join(app.getPath("userData"), "rojo-wireguard.conf");
+
+ipcMain.handle("vpn-status", () => {
+  return vpn ? vpn.getTunnelState() : { active: false, address: null, interfaceName: null };
+});
+
+ipcMain.handle("vpn-connect", async (_evt, configText, splitTunnelHosts) => {
+  if (!vpn) return { ok: false, error: "VPN module not available" };
+  try {
+    const result = await vpn.startTunnel(configText, splitTunnelHosts);
+    return result;
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle("vpn-disconnect", async () => {
+  if (!vpn) return { ok: false, error: "VPN module not available" };
+  try {
+    return await vpn.stopTunnel();
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle("vpn-test", async (_evt, url) => {
+  if (!vpn) return { ok: false, error: "VPN module not available" };
+  try {
+    const state = vpn.getTunnelState();
+    if (!state.active) return { ok: false, error: "VPN is not active" };
+    const res = await vpn.vpnFetch(url, { method: "HEAD", localAddress: state.address, timeoutMs: 15000 });
+    return { ok: res.ok, status: res.status, statusText: res.statusText };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle("vpn-save-config", async (_evt, configText) => {
+  try {
+    const p = VPN_CONFIG_PATH_ROJO();
+    if (typeof configText === "string" && configText.trim()) {
+      fs.writeFileSync(p, configText.trim(), "utf8");
+      return { ok: true };
+    }
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle("vpn-load-config", async () => {
+  try {
+    const p = VPN_CONFIG_PATH_ROJO();
+    if (fs.existsSync(p)) {
+      const text = String(fs.readFileSync(p, "utf8") ?? "").trim();
+      if (text) return { ok: true, config: text };
+    }
+    return { ok: true, config: "" };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e), config: "" };
+  }
 });
 
 // Handle magnet: protocol on macOS

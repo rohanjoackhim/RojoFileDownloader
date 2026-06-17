@@ -374,10 +374,127 @@ rojoAPI.onTorrentError((msg) => {
   showToast(msg, "error");
 });
 
+// ---------- VPN ----------
+
+let vpnActive = false;
+
+function updateVpnUI(status) {
+  vpnActive = status.active;
+  const vpnBtn = $("btnVpnToggle");
+  const vpnStatus = $("vpnStatus");
+  const vpnLabel = $("vpnLabel");
+
+  if (status.active) {
+    vpnBtn.classList.add("active");
+    vpnStatus.style.display = "inline-flex";
+    vpnLabel.textContent = status.address ? `VPN ${status.address}` : "VPN on";
+  } else {
+    vpnBtn.classList.remove("active");
+    vpnStatus.style.display = "none";
+  }
+}
+
+async function refreshVpnStatus() {
+  try {
+    const status = await rojoAPI.vpnStatus();
+    updateVpnUI(status);
+  } catch (e) {
+    console.warn("[VPN] status error:", e.message);
+  }
+}
+
+function openVpnModal() {
+  $("vpnModal").classList.add("show");
+  $("vpnError").textContent = "";
+  $("vpnSuccess").textContent = "";
+  // Load saved config
+  rojoAPI.vpnLoadConfig().then((res) => {
+    if (res.ok && res.config) $("vpnConfigInput").value = res.config;
+  }).catch(() => {});
+}
+
+function closeVpnModal() {
+  $("vpnModal").classList.remove("show");
+  $("vpnError").textContent = "";
+  $("vpnSuccess").textContent = "";
+}
+
+async function connectVpn() {
+  const config = $("vpnConfigInput").value.trim();
+  if (!config) {
+    $("vpnError").textContent = "Paste your WireGuard config first.";
+    return;
+  }
+  $("vpnError").textContent = "";
+  $("vpnSuccess").textContent = "Connecting…";
+  try {
+    const res = await rojoAPI.vpnConnect(config);
+    if (res.ok) {
+      $("vpnSuccess").textContent = `Connected! Tunnel: ${res.address ?? "unknown"}`;
+      await rojoAPI.vpnSaveConfig(config);
+      updateVpnUI({ active: true, address: res.address });
+    } else {
+      $("vpnSuccess").textContent = "";
+      $("vpnError").textContent = res.error || "Failed to connect.";
+    }
+  } catch (e) {
+    $("vpnSuccess").textContent = "";
+    $("vpnError").textContent = e.message;
+  }
+}
+
+async function disconnectVpn() {
+  $("vpnError").textContent = "";
+  $("vpnSuccess").textContent = "Disconnecting…";
+  try {
+    const res = await rojoAPI.vpnDisconnect();
+    if (res.ok) {
+      $("vpnSuccess").textContent = "Disconnected.";
+      updateVpnUI({ active: false, address: null });
+    } else {
+      $("vpnSuccess").textContent = "";
+      $("vpnError").textContent = res.error || "Failed to disconnect.";
+    }
+  } catch (e) {
+    $("vpnSuccess").textContent = "";
+    $("vpnError").textContent = e.message;
+  }
+}
+
+async function testVpn() {
+  $("vpnError").textContent = "";
+  $("vpnSuccess").textContent = "Testing…";
+  try {
+    const res = await rojoAPI.vpnTest("https://1.1.1.1");
+    if (res.ok) {
+      $("vpnSuccess").textContent = `VPN test OK: ${res.status} ${res.statusText ?? ""}`;
+    } else {
+      $("vpnSuccess").textContent = "";
+      $("vpnError").textContent = res.error || `Test failed: ${res.status}`;
+    }
+  } catch (e) {
+    $("vpnSuccess").textContent = "";
+    $("vpnError").textContent = e.message;
+  }
+}
+
+// Poll VPN status every 5 seconds
+setInterval(refreshVpnStatus, 5000);
+
+// ---------- Event Wiring ----------
+
+$("btnVpnToggle").addEventListener("click", openVpnModal);
+$("btnVpnCancel").addEventListener("click", closeVpnModal);
+$("btnVpnConnect").addEventListener("click", connectVpn);
+$("btnVpnDisconnect").addEventListener("click", disconnectVpn);
+$("btnVpnTest").addEventListener("click", testVpn);
+$("vpnModal").querySelector(".modal-backdrop").addEventListener("click", closeVpnModal);
+
 // ---------- Init ----------
 
 (async function init() {
   const dlPath = await rojoAPI.getDownloadPath();
   console.log("[RO^JO] Download path:", dlPath);
   renderTorrents();
+  refreshVpnStatus();
 })();
