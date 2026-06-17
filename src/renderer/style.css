@@ -534,6 +534,17 @@ html, body {
   gap: 4px;
 }
 
+.detail-path {
+  margin-top: 10px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+
 /* Status bar */
 .status-bar {
   display: flex;

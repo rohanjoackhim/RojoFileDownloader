@@ -14,7 +14,7 @@ try {
 }
 
 // ---------- Config ----------
-const DEFAULT_DOWNLOAD_DIR = path.join(os.homedir(), "Downloads", "RO^JO");
+const DEFAULT_DOWNLOAD_DIR = path.join(os.homedir(), "Downloads", "Rojo");
 if (!fs.existsSync(DEFAULT_DOWNLOAD_DIR)) {
   fs.mkdirSync(DEFAULT_DOWNLOAD_DIR, { recursive: true });
 }
@@ -193,6 +193,31 @@ async function initWebTorrent() {
       entry.timeRemaining = t.timeRemaining || 0;
       entry.ratio = t.downloaded > 0 ? (t.uploaded || 0) / t.downloaded : 0;
       if (t.done) entry.status = "completed";
+
+      // Debug: verify files actually exist on disk
+      if (entry.path && t.downloaded > 0) {
+        try {
+          const stat = fs.statSync(entry.path);
+          if (stat.size === 0 && t.downloaded > 1024 * 1024) {
+            console.warn(`[RO^JO] WARNING: ${entry.name} shows ${(t.downloaded / 1024 / 1024 / 1024).toFixed(2)}GB downloaded but file is 0 bytes at ${entry.path}`);
+          }
+        } catch (e) {
+          // File or folder doesn't exist yet — may be a multi-file torrent
+          // Try checking the parent folder
+          try {
+            const parentDir = path.dirname(entry.path);
+            if (fs.existsSync(parentDir)) {
+              const items = fs.readdirSync(parentDir);
+              console.log(`[RO^JO] ${entry.name} parent dir exists: ${parentDir}, contents:`, items.slice(0, 5));
+            } else {
+              console.warn(`[RO^JO] WARNING: ${entry.name} parent dir does not exist: ${parentDir}`);
+            }
+          } catch (e2) {
+            console.warn(`[RO^JO] WARNING: ${entry.name} cannot check disk path: ${e2.message}`);
+          }
+        }
+      }
+
       list.push({ ...entry });
     }
     broadcast("torrents-updated", {
@@ -216,11 +241,17 @@ async function handleAddMagnet(magnetUri) {
     return new Promise((resolve) => {
       let responded = false;
       let torrent;
+      console.log(`[RO^JO] Adding magnet, downloadPath=${downloadPath}`);
       try {
         torrent = client.add(magnetUri, {
           path: downloadPath,
           announce: ROJO_CONFIG.announce,
         }, (t) => {
+          const actualPath = path.join(downloadPath, t.name);
+          console.log(`[RO^JO] Torrent ready: name="${t.name}", infoHash=${t.infoHash}, actualPath=${actualPath}, files=${t.files.length}`);
+          for (const f of t.files) {
+            console.log(`[RO^JO]   file: ${f.name}, length=${f.length}, path=${f.path}`);
+          }
           activeTorrents.set(t.infoHash, {
             name: t.name,
             infoHash: t.infoHash,
@@ -228,7 +259,7 @@ async function handleAddMagnet(magnetUri) {
             speed: 0,
             peers: 0,
             status: "downloading",
-            path: path.join(downloadPath, t.name),
+            path: actualPath,
             addedAt: Date.now(),
             downloaded: 0,
             length: t.length || 0,
@@ -272,11 +303,17 @@ async function handleAddTorrentFile(buffer) {
     return new Promise((resolve) => {
       let responded = false;
       let torrent;
+      console.log(`[RO^JO] Adding torrent file, downloadPath=${downloadPath}`);
       try {
         torrent = client.add(buffer, {
           path: downloadPath,
           announce: ROJO_CONFIG.announce,
         }, (t) => {
+          const actualPath = path.join(downloadPath, t.name);
+          console.log(`[RO^JO] Torrent ready: name="${t.name}", infoHash=${t.infoHash}, actualPath=${actualPath}, files=${t.files.length}`);
+          for (const f of t.files) {
+            console.log(`[RO^JO]   file: ${f.name}, length=${f.length}, path=${f.path}`);
+          }
           activeTorrents.set(t.infoHash, {
             name: t.name,
             infoHash: t.infoHash,
@@ -284,7 +321,7 @@ async function handleAddTorrentFile(buffer) {
             speed: 0,
             peers: 0,
             status: "downloading",
-            path: path.join(downloadPath, t.name),
+            path: actualPath,
             addedAt: Date.now(),
             downloaded: 0,
             length: t.length || 0,
@@ -401,7 +438,7 @@ ipcMain.handle("open-folder", async () => {
 });
 
 ipcMain.handle("open-torrent-folder", async (_event, folderPath) => {
-  shell.openPath(folderPath);
+  shell.showItemInFolder(folderPath);
   return null;
 });
 

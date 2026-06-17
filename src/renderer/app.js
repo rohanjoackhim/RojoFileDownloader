@@ -79,6 +79,7 @@ function updateDetailPanel(t) {
   $("detailUp").textContent = "\u2191 " + formatSpeed(t.uploadSpeed || 0);
   $("detailEta").textContent = "ETA: " + formatEta(t.timeRemaining);
   $("detailRatio").textContent = "Ratio: " + (t.ratio || 0).toFixed(2);
+  $("detailPath").textContent = t.path || "--";
 }
 
 // ---------- Torrent List Rendering ----------
