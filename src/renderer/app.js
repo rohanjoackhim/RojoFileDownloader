@@ -201,16 +201,16 @@ function updateTorrentElement(refs, t) {
     refs.fill.className = "progress-fill " + fillClass;
     refs.fill.style.width = pct + "%";
   }
-  // Update icon text with percentage or "Done"
-  const iconText = isDone ? "Done" : pct + "%";
-  if (last.iconText !== iconText) refs.iconText.textContent = iconText;
-  refs._last = { name: t.name, status: t.status, pct, size: sizeText, peers: peersText, speed: speedText, eta: etaText, fillClass, iconText };
-
   // Rebuild action buttons only when status changes
   const isActive = t.status === "downloading" || t.status === "paused";
   const isPaused = t.status === "paused";
   const isDone = t.status === "completed";
   const hash = t.infoHash;
+
+  // Update icon text with percentage or "Done"
+  const iconText = isDone ? "Done" : pct + "%";
+  if (last.iconText !== iconText) refs.iconText.textContent = iconText;
+  refs._last = { name: t.name, status: t.status, pct, size: sizeText, peers: peersText, speed: speedText, eta: etaText, fillClass, iconText };
 
   const existingStatus = refs.actions.dataset.status;
   const newStatus = t.status;
