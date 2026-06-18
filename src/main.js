@@ -67,6 +67,11 @@ let restartStatsLoop = null; // called when window is recreated after being clos
 // Store last used download path
 let lastDownloadPath = DEFAULT_DOWNLOAD_DIR;
 
+// Torrent state persistence
+const TORRENTS_STATE_PATH = path.join(app.getPath("userData"), "rojo-torrents.json");
+const TORRENTS_FILES_DIR = path.join(app.getPath("userData"), "torrents");
+if (!fs.existsSync(TORRENTS_FILES_DIR)) fs.mkdirSync(TORRENTS_FILES_DIR, { recursive: true });
+
 function formatSpeedBadge(bps) {
   if (!bps || bps === 0) return "";
   const k = 1024;
@@ -83,6 +88,58 @@ function formatSpeed(bps) {
   if (bps < k * k) return (bps / k).toFixed(1).replace(/\.0$/, "") + " KB/s";
   if (bps < k * k * k) return (bps / (k * k)).toFixed(1).replace(/\.0$/, "") + " MB/s";
   return (bps / (k * k * k)).toFixed(1).replace(/\.0$/, "") + " GB/s";
+}
+
+function saveTorrentsState() {
+  try {
+    const list = Array.from(activeTorrents.values());
+    fs.writeFileSync(TORRENTS_STATE_PATH, JSON.stringify(list, null, 2), "utf8");
+    console.log(`[RO^JO] Saved ${list.length} torrents to state file`);
+  } catch (e) {
+    console.error("[RO^JO] Failed to save torrents state:", e.message);
+  }
+}
+
+async function restoreTorrents() {
+  try {
+    if (!fs.existsSync(TORRENTS_STATE_PATH)) return;
+    const text = fs.readFileSync(TORRENTS_STATE_PATH, "utf8");
+    if (!text.trim()) return;
+    const list = JSON.parse(text);
+    if (!Array.isArray(list) || list.length === 0) return;
+    console.log(`[RO^JO] Restoring ${list.length} torrents from state file`);
+
+    for (const entry of list) {
+      if (!entry.infoHash) continue;
+      // Re-add to activeTorrents map
+      activeTorrents.set(entry.infoHash, entry);
+      // Try to re-add to WebTorrent client
+      if (entry.magnetUri) {
+        try {
+          client.add(entry.magnetUri, {
+            path: entry.path ? path.dirname(entry.path) : DEFAULT_DOWNLOAD_DIR,
+            announce: ROJO_CONFIG.announce,
+          });
+          console.log(`[RO^JO] Re-added magnet torrent: ${entry.name}`);
+        } catch (e) {
+          console.error(`[RO^JO] Failed to re-add magnet torrent ${entry.name}:`, e.message);
+        }
+      } else if (entry.torrentFilePath && fs.existsSync(entry.torrentFilePath)) {
+        try {
+          const buf = fs.readFileSync(entry.torrentFilePath);
+          client.add(buf, {
+            path: entry.path ? path.dirname(entry.path) : DEFAULT_DOWNLOAD_DIR,
+            announce: ROJO_CONFIG.announce,
+          });
+          console.log(`[RO^JO] Re-added .torrent file: ${entry.name}`);
+        } catch (e) {
+          console.error(`[RO^JO] Failed to re-add .torrent ${entry.name}:`, e.message);
+        }
+      }
+    }
+  } catch (e) {
+    console.error("[RO^JO] Failed to restore torrents:", e.message);
+  }
 }
 
 function updateDockBadge() {
@@ -382,6 +439,7 @@ async function handleAddMagnet(magnetUri) {
             addedAt: Date.now(),
             downloaded: 0,
             length: t.length || 0,
+            magnetUri: magnetUri,
           });
           console.log(`[RO^JO] Added to activeTorrents: ${t.infoHash}, total activeTorrents=${activeTorrents.size}`);
           if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: displayName || t.name }); }
@@ -437,6 +495,14 @@ async function handleAddTorrentFile(buffer) {
         }, (t) => {
           const actualPath = path.join(downloadPath, t.name);
           console.log(`[RO^JO] Torrent ready: name="${t.name}", infoHash=${t.infoHash}, path=${actualPath}`);
+          // Save .torrent file buffer for persistence
+          const torrentFilePath = path.join(TORRENTS_FILES_DIR, `${t.infoHash}.torrent`);
+          try {
+            fs.writeFileSync(torrentFilePath, Buffer.from(buffer));
+          } catch (e) {
+            console.error("[RO^JO] Failed to save .torrent file:", e.message);
+          }
+
           activeTorrents.set(t.infoHash, {
             name: t.name,
             infoHash: t.infoHash,
@@ -448,6 +514,7 @@ async function handleAddTorrentFile(buffer) {
             addedAt: Date.now(),
             downloaded: 0,
             length: t.length || 0,
+            torrentFilePath: torrentFilePath,
           });
           if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: t.name }); }
         });
@@ -1015,6 +1082,7 @@ app.whenReady().then(async () => {
   }
 
   await initWebTorrent();
+  await restoreTorrents();
   await createWindow();
 
   app.on("activate", () => {
@@ -1030,7 +1098,10 @@ app.on("before-quit", (e) => {
   isQuitting = true;
   // Stop stats loop immediately
   statsRunning = false;
-  
+
+  // Save torrent state before quit
+  saveTorrentsState();
+
   // Destroy WebTorrent client synchronously before quit
   if (client) {
     try {
