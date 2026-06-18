@@ -190,15 +190,26 @@ async function initWebTorrent() {
       for (const t of client.torrents) {
         const entry = activeTorrents.get(t.infoHash);
         if (!entry) continue;
-        entry.progress = t.progress;
-        entry.speed = t.downloadSpeed;
-        entry.uploadSpeed = t.uploadSpeed;
+        const isPaused = entry.status === "paused";
+        if (isPaused && entry._frozenDownloaded !== undefined) {
+          // Use frozen values so in-flight pieces don't inflate the UI
+          entry.progress = entry._frozenProgress;
+          entry.speed = 0;
+          entry.uploadSpeed = 0;
+          entry.downloaded = entry._frozenDownloaded;
+          entry.uploaded = entry._frozenUploaded;
+          entry.ratio = entry._frozenDownloaded > 0 ? entry._frozenUploaded / entry._frozenDownloaded : 0;
+        } else {
+          entry.progress = t.progress;
+          entry.speed = t.downloadSpeed;
+          entry.uploadSpeed = t.uploadSpeed;
+          entry.downloaded = t.downloaded;
+          entry.uploaded = t.uploaded || 0;
+          entry.ratio = t.downloaded > 0 ? (t.uploaded || 0) / t.downloaded : 0;
+        }
         entry.peers = t.numPeers;
-        entry.downloaded = t.downloaded;
-        entry.uploaded = t.uploaded || 0;
         entry.length = t.length;
         entry.timeRemaining = t.timeRemaining || 0;
-        entry.ratio = t.downloaded > 0 ? (t.uploaded || 0) / t.downloaded : 0;
         if (t.done) entry.status = "completed";
         list.push({ ...entry });
       }
@@ -376,7 +387,13 @@ async function pauseTorrent(infoHash) {
   torrent.pause();
   torrent.maxConns = 0;
   const entry = activeTorrents.get(infoHash);
-  if (entry) entry.status = "paused";
+  if (entry) {
+    entry.status = "paused";
+    // Freeze stats so in-flight pieces don't show increasing size in UI
+    entry._frozenDownloaded = torrent.downloaded;
+    entry._frozenUploaded = torrent.uploaded || 0;
+    entry._frozenProgress = torrent.progress;
+  }
   return { ok: true };
 }
 
@@ -387,7 +404,13 @@ async function resumeTorrent(infoHash) {
   torrent.resume();
   torrent.maxConns = 100; // restore per-torrent connections
   const entry = activeTorrents.get(infoHash);
-  if (entry) entry.status = "downloading";
+  if (entry) {
+    entry.status = "downloading";
+    // Clear frozen stats so live values resume
+    delete entry._frozenDownloaded;
+    delete entry._frozenUploaded;
+    delete entry._frozenProgress;
+  }
   return { ok: true };
 }
 
