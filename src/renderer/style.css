@@ -275,7 +275,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 6px;
-  transition: background 0.15s, border-color 0.15s;
+  contain: layout;
   cursor: pointer;
 }
 
@@ -372,7 +372,6 @@ html, body {
   height: 100%;
   background: var(--success);
   border-radius: 2px;
-  transition: width 0.3s;
 }
 
 .progress-fill.completed {
@@ -512,7 +511,6 @@ html, body {
   height: 100%;
   background: linear-gradient(180deg, #22c55e 0%, #16a34a 100%);
   border-radius: 2px;
-  transition: width 0.4s ease;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.15);
 }
 

@@ -274,9 +274,9 @@ async function initWebTorrent() {
     broadcast("torrent-error", err.message);
   });
 
-  // Periodically broadcast stats to renderer (non-blocking loop)
-  // Loop always runs even when window is closed — broadcasts resume when window reopens
+  // Periodically broadcast stats to renderer (non-blocking loop, every 2s)
   let statsRunning = false;
+  let lastBroadcastStr = "";
   async function statsLoop() {
     if (statsRunning) return;
     statsRunning = true;
@@ -324,12 +324,18 @@ async function initWebTorrent() {
           entry.length = t.length;
           entry.timeRemaining = t.timeRemaining || 0;
           if (t.done) entry.status = "completed";
+
+          // Round values to reduce jitter-induced re-renders
+          const speed = Math.round((entry.speed || 0) / 1024) * 1024;
+          const uploadSpeed = Math.round((entry.uploadSpeed || 0) / 1024) * 1024;
+          const progress = Math.round((entry.progress || 0) * 1000) / 1000;
+
           list.push({
             name: entry.name,
             infoHash: entry.infoHash,
-            progress: entry.progress,
-            speed: entry.speed,
-            uploadSpeed: entry.uploadSpeed,
+            progress,
+            speed,
+            uploadSpeed,
             peers: entry.peers,
             status: entry.status,
             path: entry.path,
@@ -341,26 +347,32 @@ async function initWebTorrent() {
             ratio: entry.ratio,
           });
         }
-        if (win && !win.isDestroyed()) {
-          broadcast("torrents-updated", {
-            torrents: list,
-            downloadSpeed: client.downloadSpeed,
-            uploadSpeed: client.uploadSpeed,
-          });
-          updateDockBadge();
+
+        const dlSpeed = Math.round((client.downloadSpeed || 0) / 1024) * 1024;
+        const ulSpeed = Math.round((client.uploadSpeed || 0) / 1024) * 1024;
+        const payload = { torrents: list, downloadSpeed: dlSpeed, uploadSpeed: ulSpeed };
+        const payloadStr = JSON.stringify(payload);
+
+        // Only broadcast if data actually changed
+        if (payloadStr !== lastBroadcastStr) {
+          lastBroadcastStr = payloadStr;
+          if (win && !win.isDestroyed()) {
+            broadcast("torrents-updated", payload);
+            updateDockBadge();
+          }
         }
         await checkStopRatios();
 
-        // Log memory every 60s (every 60 iterations)
+        // Log memory every 30 iterations (~60s)
         statsLoop.counter = (statsLoop.counter || 0) + 1;
-        if (statsLoop.counter % 60 === 0) {
+        if (statsLoop.counter % 30 === 0) {
           const mem = process.memoryUsage();
           console.log(`[RO^JO] mem rss=${(mem.rss/1048576).toFixed(1)}MB heap=${(mem.heapUsed/1048576).toFixed(1)}MB torrents=${client.torrents.length}`);
         }
       } catch (err) {
         console.error("[RO^JO] statsLoop error:", err.message);
       }
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 2000));
     }
     statsRunning = false;
   }
