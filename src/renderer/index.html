@@ -143,6 +143,66 @@
     </div>
   </div>
 
+  <!-- Context Menu -->
+  <div id="contextMenu" class="context-menu">
+    <div class="ctx-item" data-action="copy-magnet">Copy Magnet URI</div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item ctx-has-sub" data-action="limit-dl">Limit Download Speed</div>
+    <div class="ctx-submenu" id="subDlSpeed">
+      <div class="ctx-item" data-dl="0">Unlimited</div>
+      <div class="ctx-item" data-dl="102400">100 KB/s</div>
+      <div class="ctx-item" data-dl="512000">500 KB/s</div>
+      <div class="ctx-item" data-dl="1048576">1 MB/s</div>
+      <div class="ctx-item" data-dl="5242880">5 MB/s</div>
+      <div class="ctx-item" data-dl="10485760">10 MB/s</div>
+    </div>
+    <div class="ctx-item ctx-has-sub" data-action="limit-ul">Limit Upload Speed</div>
+    <div class="ctx-submenu" id="subUlSpeed">
+      <div class="ctx-item" data-ul="0">Unlimited</div>
+      <div class="ctx-item" data-ul="102400">100 KB/s</div>
+      <div class="ctx-item" data-ul="512000">500 KB/s</div>
+      <div class="ctx-item" data-ul="1048576">1 MB/s</div>
+      <div class="ctx-item" data-ul="5242880">5 MB/s</div>
+      <div class="ctx-item" data-ul="10485760">10 MB/s</div>
+    </div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item" data-action="move-top">Move to Top</div>
+    <div class="ctx-item" data-action="move-up">Move Up</div>
+    <div class="ctx-item" data-action="move-down">Move Down</div>
+    <div class="ctx-item" data-action="move-bottom">Move to Bottom</div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item" data-action="recheck">Force Re-Check</div>
+    <div class="ctx-item" data-action="update-tracker">Update Tracker</div>
+    <div class="ctx-item" data-action="relocate">Relocate</div>
+    <div class="ctx-item" data-action="show-info">Show Torrent Info</div>
+    <div class="ctx-item ctx-has-sub" data-action="stop-ratio">Stop Seeding at Ratio</div>
+    <div class="ctx-submenu" id="subRatio">
+      <div class="ctx-item" data-ratio="0">Never</div>
+      <div class="ctx-item" data-ratio="0.5">0.5</div>
+      <div class="ctx-item" data-ratio="1.0">1.0</div>
+      <div class="ctx-item" data-ratio="1.5">1.5</div>
+      <div class="ctx-item" data-ratio="2.0">2.0</div>
+    </div>
+    <div class="ctx-item" data-action="show-log">Show Message Log</div>
+    <div class="ctx-item" data-action="show-finder">Show in Finder</div>
+    <div class="ctx-item" data-action="quick-look">Quick Look</div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-item ctx-danger" data-action="delete-task">Delete Task</div>
+    <div class="ctx-item ctx-danger" data-action="delete-files">Delete with Files</div>
+  </div>
+
+  <!-- Torrent Log Modal -->
+  <div id="logModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-wide" style="max-width:560px;">
+      <h3 id="logTitle">Torrent Log</h3>
+      <div id="logContent" class="log-content"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btnCloseLog">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast -->
   <div id="toast" class="toast"></div>
 

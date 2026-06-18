@@ -204,6 +204,7 @@ async function initWebTorrent() {
         uploadSpeed: client.uploadSpeed,
       });
       updateDockBadge();
+      checkStopRatios();
 
       // Log memory usage every ~10 seconds (when loop counter hits 10)
       statsLoop.counter = (statsLoop.counter || 0) + 1;
@@ -461,6 +462,100 @@ ipcMain.handle("set-as-default", () => {
 
   return results;
 });
+
+// ---------- Context Menu IPC ----------
+
+ipcMain.handle("get-magnet-uri", async (_evt, infoHash) => {
+  if (!client) return null;
+  const torrent = client.get(infoHash);
+  return torrent ? torrent.magnetURI : null;
+});
+
+// Per-torrent speed throttling (basic: pause/resume interval)
+const speedThrottles = new Map(); // infoHash -> { interval, dlLimit, ulLimit }
+
+function clearThrottle(infoHash) {
+  const t = speedThrottles.get(infoHash);
+  if (t) { clearInterval(t.interval); speedThrottles.delete(infoHash); }
+}
+
+function setTorrentThrottle(infoHash, dlLimit, ulLimit) {
+  clearThrottle(infoHash);
+  if (!client) return;
+  const torrent = client.get(infoHash);
+  if (!torrent) return;
+  if ((!dlLimit || dlLimit <= 0) && (!ulLimit || ulLimit <= 0)) return;
+
+  let lastDownloaded = torrent.downloaded;
+  let lastUploaded = torrent.uploaded || 0;
+  let paused = false;
+
+  const interval = setInterval(() => {
+    const t = client.get(infoHash);
+    if (!t) { clearThrottle(infoHash); return; }
+
+    const dlDelta = t.downloaded - lastDownloaded;
+    const ulDelta = (t.uploaded || 0) - lastUploaded;
+    lastDownloaded = t.downloaded;
+    lastUploaded = t.uploaded || 0;
+
+    const dlOver = dlLimit > 0 && dlDelta > dlLimit;
+    const ulOver = ulLimit > 0 && ulDelta > ulLimit;
+
+    if (dlOver || ulOver) {
+      if (!paused) { t.pause(); paused = true; }
+    } else {
+      if (paused) { t.resume(); paused = false; }
+    }
+  }, 1000);
+
+  speedThrottles.set(infoHash, { interval, dlLimit, ulLimit });
+}
+
+ipcMain.handle("limit-speed", async (_evt, infoHash, dlBytes, ulBytes) => {
+  if (!client) return { ok: false, error: "Engine not ready" };
+  const torrent = client.get(infoHash);
+  if (!torrent) return { ok: false, error: "Torrent not found" };
+  setTorrentThrottle(infoHash, dlBytes || 0, ulBytes || 0);
+  return { ok: true };
+});
+
+ipcMain.handle("recheck-torrent", async (_evt, infoHash) => {
+  if (!client) return { ok: false, error: "Engine not ready" };
+  const torrent = client.get(infoHash);
+  if (!torrent) return { ok: false, error: "Torrent not found" };
+  // Re-check: destroy store and re-verify
+  try {
+    torrent.destroy();
+    // Re-add with same path to force re-check
+    const entry = activeTorrents.get(infoHash);
+    if (entry && torrent.magnetURI) {
+      client.add(torrent.magnetURI, { path: path.dirname(entry.path) });
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+const stopRatios = new Map(); // infoHash -> target ratio
+
+ipcMain.handle("set-stop-ratio", async (_evt, infoHash, ratio) => {
+  if (ratio <= 0) stopRatios.delete(infoHash);
+  else stopRatios.set(infoHash, ratio);
+  return { ok: true };
+});
+
+// Check stop ratios in the stats loop
+function checkStopRatios() {
+  for (const [infoHash, target] of stopRatios) {
+    const entry = activeTorrents.get(infoHash);
+    if (entry && entry.ratio >= target && entry.status !== "paused") {
+      pauseTorrent(infoHash);
+      broadcast("torrent-auto-paused", { name: entry.name, ratio: target });
+    }
+  }
+}
 
 // ---------- VPN IPC ----------
 const VPN_CONFIG_PATH_ROJO = () => path.join(app.getPath("userData"), "rojo-wireguard.conf");

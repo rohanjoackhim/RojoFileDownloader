@@ -19,6 +19,12 @@ contextBridge.exposeInMainWorld("rojoAPI", {
   getDownloadPath: () => ipcRenderer.invoke("get-download-path"),
   setAsDefault: () => ipcRenderer.invoke("set-as-default"),
 
+  // Context menu actions
+  getMagnetUri: (infoHash) => ipcRenderer.invoke("get-magnet-uri", infoHash),
+  limitSpeed: (infoHash, dlBytes, ulBytes) => ipcRenderer.invoke("limit-speed", infoHash, dlBytes, ulBytes),
+  recheckTorrent: (infoHash) => ipcRenderer.invoke("recheck-torrent", infoHash),
+  setStopRatio: (infoHash, ratio) => ipcRenderer.invoke("set-stop-ratio", infoHash, ratio),
+
   // VPN
   vpnStatus: () => ipcRenderer.invoke("vpn-status"),
   vpnConnect: (configText, splitTunnelHosts) => ipcRenderer.invoke("vpn-connect", configText, splitTunnelHosts),
@@ -36,5 +42,8 @@ contextBridge.exposeInMainWorld("rojoAPI", {
   },
   onTorrentError: (callback) => {
     ipcRenderer.on("torrent-error", (_event, msg) => callback(msg));
+  },
+  onTorrentAutoPaused: (callback) => {
+    ipcRenderer.on("torrent-auto-paused", (_event, data) => callback(data));
   },
 });

@@ -2,6 +2,9 @@
 
 let torrents = [];
 let selectedHash = null;
+let contextHash = null;
+let torrentOrder = []; // array of infoHashes in display order
+const torrentLogs = new Map(); // infoHash -> array of log lines
 
 // ---------- UI Helpers ----------
 
@@ -101,7 +104,18 @@ function renderTorrents() {
   emptyEl.style.display = "none";
   dropEl.style.display = "none";
 
-  listEl.innerHTML = torrents.map((t) => {
+  // Apply custom order if set
+  let displayTorrents = torrents;
+  if (torrentOrder.length > 0) {
+    const orderMap = new Map(torrentOrder.map((h, i) => [h, i]));
+    displayTorrents = [...torrents].sort((a, b) => {
+      const oa = orderMap.get(a.infoHash) ?? 9999;
+      const ob = orderMap.get(b.infoHash) ?? 9999;
+      return oa - ob;
+    });
+  }
+
+  listEl.innerHTML = displayTorrents.map((t) => {
     const pct = Math.round((t.progress || 0) * 100);
     const statusClass = t.status === "completed" ? "status-completed" :
                         t.status === "paused" ? "status-paused" : "status-downloading";
@@ -125,7 +139,7 @@ function renderTorrents() {
     actionButtons += `<button class="btn-small btn-delete-files" onclick="event.stopPropagation(); deleteWithFiles('${t.infoHash}')">Delete</button>`;
 
     return `
-      <div class="torrent-item ${isSelected ? "selected" : ""}" data-hash="${t.infoHash}" onclick="selectTorrent('${t.infoHash}')">
+      <div class="torrent-item ${isSelected ? "selected" : ""}" data-hash="${t.infoHash}" onclick="selectTorrent('${t.infoHash}')" oncontextmenu="showContextMenu(event, '${t.infoHash}')">
         <div class="torrent-icon">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         </div>
@@ -381,6 +395,174 @@ $("btnSetDefault").addEventListener("click", async () => {
 // Close modal on backdrop click
 $("magnetModal").querySelector(".modal-backdrop").addEventListener("click", closeModal);
 
+// ---------- Context Menu ----------
+
+function showContextMenu(e, infoHash) {
+  e.preventDefault();
+  contextHash = infoHash;
+  const menu = $("contextMenu");
+  hideSubmenus();
+
+  // Position menu near cursor, keep inside viewport
+  const x = Math.min(e.clientX, window.innerWidth - 240);
+  const y = Math.min(e.clientY, window.innerHeight - 420);
+  menu.style.left = x + "px";
+  menu.style.top = y + "px";
+  menu.classList.add("show");
+}
+
+function hideContextMenu() {
+  $("contextMenu").classList.remove("show");
+  hideSubmenus();
+  contextHash = null;
+}
+
+function hideSubmenus() {
+  document.querySelectorAll(".ctx-submenu").forEach(s => s.classList.remove("show"));
+}
+
+function showSubmenu(subId, anchorEl) {
+  hideSubmenus();
+  const sub = $(subId);
+  sub.classList.add("show");
+  // Position submenu to the right of the anchor
+  const rect = anchorEl.getBoundingClientRect();
+  sub.style.left = rect.right + "px";
+  sub.style.top = rect.top + "px";
+}
+
+// Hide context menu on any click outside
+window.addEventListener("click", (e) => {
+  if (!e.target.closest(".context-menu")) hideContextMenu();
+});
+
+// Copy Magnet URI
+async function copyMagnetUri(infoHash) {
+  try {
+    const uri = await rojoAPI.getMagnetUri(infoHash);
+    if (uri) {
+      await navigator.clipboard.writeText(uri);
+      showToast("Magnet URI copied to clipboard");
+    } else {
+      showToast("Magnet URI not available", "error");
+    }
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+}
+
+// Move torrents
+function moveTorrent(infoHash, direction) {
+  const idx = torrentOrder.indexOf(infoHash);
+  if (idx === -1) {
+    // Build order from current torrents if not set
+    torrentOrder = torrents.map(t => t.infoHash);
+  }
+  const currentIdx = torrentOrder.indexOf(infoHash);
+  if (currentIdx === -1) return;
+
+  let newIdx;
+  if (direction === "top") newIdx = 0;
+  else if (direction === "bottom") newIdx = torrentOrder.length - 1;
+  else if (direction === "up") newIdx = Math.max(0, currentIdx - 1);
+  else if (direction === "down") newIdx = Math.min(torrentOrder.length - 1, currentIdx + 1);
+  else return;
+
+  const [moved] = torrentOrder.splice(currentIdx, 1);
+  torrentOrder.splice(newIdx, 0, moved);
+  renderTorrents();
+}
+
+// Speed limits (basic IPC)
+async function setDlLimit(infoHash, bytesPerSec) {
+  try {
+    await rojoAPI.limitSpeed(infoHash, bytesPerSec, null);
+    showToast(bytesPerSec === 0 ? "Download unlimited" : `Download limited to ${formatSpeed(bytesPerSec)}`);
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+}
+async function setUlLimit(infoHash, bytesPerSec) {
+  try {
+    await rojoAPI.limitSpeed(infoHash, null, bytesPerSec);
+    showToast(bytesPerSec === 0 ? "Upload unlimited" : `Upload limited to ${formatSpeed(bytesPerSec)}`);
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+}
+
+// Show torrent log
+function showTorrentLog(infoHash) {
+  const t = torrents.find(x => x.infoHash === infoHash);
+  $("logTitle").textContent = t ? `Log: ${t.name}` : "Torrent Log";
+  const lines = torrentLogs.get(infoHash) || [];
+  $("logContent").textContent = lines.length ? lines.join("\n") : "No log entries yet.";
+  $("logModal").classList.add("show");
+}
+function closeLogModal() {
+  $("logModal").classList.remove("show");
+}
+
+// Quick Look
+function quickLookTorrent(infoHash) {
+  const t = torrents.find(x => x.infoHash === infoHash);
+  if (t && t.path) {
+    rojoAPI.openTorrentFolder(t.path);
+  }
+}
+
+// Force Re-Check
+async function recheckTorrent(infoHash) {
+  try {
+    await rojoAPI.recheckTorrent(infoHash);
+    showToast("Re-checking torrent…");
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+}
+
+// Context menu item clicks
+$("contextMenu").addEventListener("click", (e) => {
+  const item = e.target.closest(".ctx-item");
+  if (!item || !contextHash) return;
+
+  const action = item.dataset.action;
+  const hash = contextHash;
+
+  if (action === "copy-magnet") copyMagnetUri(hash);
+  else if (action === "limit-dl") showSubmenu("subDlSpeed", item);
+  else if (action === "limit-ul") showSubmenu("subUlSpeed", item);
+  else if (action === "move-top") moveTorrent(hash, "top");
+  else if (action === "move-up") moveTorrent(hash, "up");
+  else if (action === "move-down") moveTorrent(hash, "down");
+  else if (action === "move-bottom") moveTorrent(hash, "bottom");
+  else if (action === "recheck") recheckTorrent(hash);
+  else if (action === "update-tracker") showToast("Update tracker: not yet implemented", "error");
+  else if (action === "relocate") showToast("Relocate: not yet implemented", "error");
+  else if (action === "show-info") { selectTorrent(hash); }
+  else if (action === "stop-ratio") showSubmenu("subRatio", item);
+  else if (action === "show-log") showTorrentLog(hash);
+  else if (action === "show-finder") openTorrentFolder(hash);
+  else if (action === "quick-look") quickLookTorrent(hash);
+  else if (action === "delete-task") removeTorrent(hash);
+  else if (action === "delete-files") deleteWithFiles(hash);
+
+  // Submenu selections
+  if (item.dataset.dl !== undefined) setDlLimit(hash, parseInt(item.dataset.dl));
+  if (item.dataset.ul !== undefined) setUlLimit(hash, parseInt(item.dataset.ul));
+  if (item.dataset.ratio !== undefined) {
+    rojoAPI.setStopRatio(hash, parseFloat(item.dataset.ratio));
+    showToast(`Stop seeding at ratio ${item.dataset.ratio}`);
+  }
+
+  if (!action || !action.startsWith("limit") && action !== "stop-ratio") {
+    hideContextMenu();
+  }
+});
+
+$("btnCloseLog").addEventListener("click", closeLogModal);
+$("logModal").querySelector(".modal-backdrop").addEventListener("click", closeLogModal);
+
 // ---------- IPC Listeners ----------
 
 let renderPending = false;
@@ -398,14 +580,30 @@ rojoAPI.onTorrentsUpdated((data) => {
       renderTorrents();
     });
   }
+  // Log speed updates for each torrent
+  const now = new Date().toLocaleTimeString();
+  for (const t of torrents) {
+    if (!torrentLogs.has(t.infoHash)) torrentLogs.set(t.infoHash, []);
+    const log = torrentLogs.get(t.infoHash);
+    if (t.speed > 0 || t.uploadSpeed > 0) {
+      log.push(`[${now}] ${t.status} | ${formatSpeed(t.speed)} down | ${formatSpeed(t.uploadSpeed)} up | ${Math.round(t.progress*100)}% | ${t.peers} peers`);
+      if (log.length > 100) log.shift(); // keep last 100 lines
+    }
+  }
 });
 
 rojoAPI.onTorrentCompleted((data) => {
   showToast(`Completed: ${data.name}`);
+  if (!torrentLogs.has(data.infoHash)) torrentLogs.set(data.infoHash, []);
+  torrentLogs.get(data.infoHash).push(`[${new Date().toLocaleTimeString()}] COMPLETED`);
 });
 
 rojoAPI.onTorrentError((msg) => {
   showToast(msg, "error");
+});
+
+rojoAPI.onTorrentAutoPaused((data) => {
+  showToast(`Stopped seeding ${data.name} at ratio ${data.ratio.toFixed(2)}`);
 });
 
 // ---------- VPN ----------
