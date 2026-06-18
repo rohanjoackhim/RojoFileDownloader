@@ -617,22 +617,13 @@ function updateDefaultStar(isDefault) {
 
 $("btnSetDefault").addEventListener("click", async () => {
   try {
-    const res = await rojoAPI.setAsDefault();
-    if (res.magnet) {
-      showToast("Set as default for magnet links");
-    } else {
-      showToast("Failed to set default for magnet links", "error");
-    }
-    if (res.torrent === true) {
-      showToast("Set as default for .torrent files");
-    } else if (res.torrent === "manual") {
-      showToast("For .torrent files: right-click → Get Info → Open With → Change All");
-    } else if (res.torrent === false) {
-      showToast("Failed to set default for .torrent files", "error");
-    }
-    // Update star color after setting
+    await rojoAPI.setAsDefault();
     const check = await rojoAPI.checkIsDefault();
     updateDefaultStar(check.isDefault);
+    // Only show feedback when something actually failed
+    if (!check.isDefault) {
+      showToast("Could not set as default. macOS may require the app to be in /Applications.", "error");
+    }
   } catch (e) {
     showToast(e.message, "error");
   }

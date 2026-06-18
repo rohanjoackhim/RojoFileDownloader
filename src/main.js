@@ -501,7 +501,12 @@ ipcMain.handle("get-download-path", () => {
 });
 
 ipcMain.handle("set-as-default", () => {
-  const magnetOk = app.setAsDefaultProtocolClient("magnet");
+  let magnetOk = false;
+  try {
+    magnetOk = app.setAsDefaultProtocolClient("magnet");
+  } catch (e) {
+    console.warn("[RO^JO] setAsDefaultProtocolClient failed:", e.message);
+  }
   const results = { magnet: magnetOk };
 
   if (process.platform === "win32") {
@@ -520,7 +525,7 @@ ipcMain.handle("set-as-default", () => {
     // Register ROJO as default app for .torrent files on macOS
     try {
       const { execSync } = require("child_process");
-      const appPath = process.platform === "darwin" ? process.execPath.replace(/\/Contents\/MacOS\/.*$/, "") : process.execPath;
+      const appPath = process.execPath.replace(/\/Contents\/MacOS\/.*$/, "");
 
       // Register app with Launch Services
       try {
@@ -528,16 +533,22 @@ ipcMain.handle("set-as-default", () => {
       } catch (e) { /* ignore */ }
 
       // Use Python to modify LaunchServices plist (built-in on all Macs)
+      // We build the script so app_path is safely inserted
+      const appPathEscaped = appPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
       const pythonScript = `
-import plistlib, os, subprocess
+import plistlib, os, subprocess, sys
 
-# Register the app
-app_path = "${appPath}"
+app_path = "${appPathEscaped}"
+errors = []
+
+# Register the app with Launch Services
 if os.path.exists(app_path):
-    subprocess.run([
+    result = subprocess.run([
         "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister",
         "-f", app_path
-    ], check=False, capture_output=True)
+    ], capture_output=True)
+    if result.returncode != 0:
+        errors.append("lsregister failed: " + result.stderr.decode("utf-8", "ignore")[:200])
 
 # Build handler entry for .torrent extension
 handler = {
@@ -570,8 +581,12 @@ for plist_path in plist_paths:
         with open(plist_path, "wb") as f:
             plistlib.dump(plist, f)
     except Exception as e:
-        print(f"plist error: {e}")
+        errors.append(f"plist error: {e}")
 
+if errors:
+    for err in errors:
+        print(err)
+    sys.exit(1)
 print("done")
 `;
       execSync(`python3 -c '${pythonScript.replace(/'/g, "'\\''")}'`, { stdio: ["ignore", "pipe", "pipe"] });
@@ -589,6 +604,8 @@ print("done")
     results.torrent = "manual";
   }
 
+  // Verify magnet registration actually took effect
+  results.magnet = app.isDefaultProtocolClient("magnet");
   return results;
 });
 
