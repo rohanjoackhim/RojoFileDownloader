@@ -304,6 +304,20 @@ async function handleAddMagnet(magnetUri) {
 
     console.log(`[RO^JO] handleAddMagnet: path=${downloadPath}, displayName=${displayName || "N/A"}`);
 
+    // Check if torrent already exists in activeTorrents (duplicate check)
+    for (const [infoHash, entry] of activeTorrents) {
+      if (magnetUri.includes(infoHash)) {
+        console.log(`[RO^JO] Duplicate torrent found in activeTorrents: ${infoHash}`);
+        return {
+          ok: false,
+          duplicate: true,
+          infoHash: infoHash,
+          name: entry.name,
+          error: "This torrent is already in your download list"
+        };
+      }
+    }
+
     // Check if torrent already exists in client (from previous failed add)
     const existingTorrent = client.torrents.find(t => magnetUri.includes(t.infoHash));
     if (existingTorrent) {
@@ -328,12 +342,12 @@ async function handleAddMagnet(magnetUri) {
       } else {
         console.log(`[RO^JO] Torrent already in activeTorrents, asking user to replace`);
         const entry = activeTorrents.get(existingTorrent.infoHash);
-        return { 
-          ok: false, 
-          duplicate: true, 
+        return {
+          ok: false,
+          duplicate: true,
           infoHash: existingTorrent.infoHash,
           name: entry ? entry.name : existingTorrent.name,
-          error: "This torrent is already in your download list" 
+          error: "This torrent is already in your download list"
         };
       }
     }
