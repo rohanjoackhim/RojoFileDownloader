@@ -277,6 +277,8 @@ async function handleAddMagnet(magnetUri) {
       if (displayName) displayName = decodeURIComponent(displayName).replace(/\+/g, " ");
     } catch (e) { /* ignore malformed URIs */ }
 
+    console.log(`[RO^JO] handleAddMagnet: path=${downloadPath}, displayName=${displayName || "N/A"}`);
+
     return new Promise((resolve) => {
       let responded = false;
       let torrent;
@@ -285,6 +287,7 @@ async function handleAddMagnet(magnetUri) {
           path: downloadPath,
           announce: ROJO_CONFIG.announce,
         }, (t) => {
+          console.log(`[RO^JO] Metadata received for torrent: ${t.name}, infoHash=${t.infoHash}`);
           const actualPath = path.join(downloadPath, t.name);
           activeTorrents.set(t.infoHash, {
             name: displayName || t.name,
@@ -298,14 +301,18 @@ async function handleAddMagnet(magnetUri) {
             downloaded: 0,
             length: t.length || 0,
           });
+          console.log(`[RO^JO] Added to activeTorrents: ${t.infoHash}, total activeTorrents=${activeTorrents.size}`);
           if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: displayName || t.name }); }
         });
+        console.log(`[RO^JO] Torrent added to client, waiting for metadata...`);
       } catch (err) {
+        console.error(`[RO^JO] Error adding torrent to client:`, err);
         if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
         return;
       }
 
       torrent.on("error", (err) => {
+        console.error(`[RO^JO] Torrent error:`, err);
         if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
       });
 
@@ -317,12 +324,14 @@ async function handleAddMagnet(magnetUri) {
 
       setTimeout(() => {
         if (!responded) {
+          console.error(`[RO^JO] Timeout waiting for metadata after 25s`);
           responded = true;
           resolve({ ok: false, error: "Timed out waiting for torrent metadata. Your ISP may block DHT/trackers." });
         }
       }, 25000);
     });
   } catch (err) {
+    console.error(`[RO^JO] handleAddMagnet error:`, err);
     return { ok: false, error: err.message };
   }
 }
