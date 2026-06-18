@@ -195,8 +195,28 @@ async function initWebTorrent() {
     while (client && !isQuitting) {
       const list = [];
       for (const t of client.torrents) {
-        const entry = activeTorrents.get(t.infoHash);
-        if (!entry) continue;
+        let entry = activeTorrents.get(t.infoHash);
+        // Fallback: if torrent is in client but not in activeTorrents, create entry on the fly
+        if (!entry) {
+          console.log(`[RO^JO] Stats loop: torrent ${t.infoHash} not in activeTorrents, creating entry`);
+          entry = {
+            name: t.name,
+            infoHash: t.infoHash,
+            progress: t.progress || 0,
+            speed: t.downloadSpeed || 0,
+            uploadSpeed: t.uploadSpeed || 0,
+            peers: t.numPeers || 0,
+            status: t.done ? "completed" : "downloading",
+            path: t.path || "",
+            addedAt: Date.now(),
+            downloaded: t.downloaded || 0,
+            uploaded: t.uploaded || 0,
+            length: t.length || 0,
+            timeRemaining: t.timeRemaining || 0,
+            ratio: t.downloaded > 0 ? (t.uploaded || 0) / t.downloaded : 0,
+          };
+          activeTorrents.set(t.infoHash, entry);
+        }
         const isPaused = entry.status === "paused";
         if (isPaused && entry._frozenDownloaded !== undefined) {
           // Use frozen values so in-flight pieces don't inflate the UI
@@ -236,6 +256,7 @@ async function initWebTorrent() {
           ratio: entry.ratio,
         });
       }
+      console.log(`[RO^JO] Stats loop: broadcasting ${list.length} torrents to renderer`);
       // Only broadcast if window exists and isn't destroyed
       if (win && !win.isDestroyed()) {
         broadcast("torrents-updated", {
