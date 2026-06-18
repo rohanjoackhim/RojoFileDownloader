@@ -71,9 +71,9 @@ function formatSpeedBadge(bps) {
   if (!bps || bps === 0) return "";
   const k = 1024;
   if (bps < k) return Math.round(bps) + "B";
-  if (bps < k * k) return (bps / k).toFixed(1).replace(/\.0$/, "") + "K";
-  if (bps < k * k * k) return (bps / (k * k)).toFixed(1).replace(/\.0$/, "") + "M";
-  return (bps / (k * k * k)).toFixed(1).replace(/\.0$/, "") + "G";
+  if (bps < k * k) return Math.round(bps / k) + "K";
+  if (bps < k * k * k) return Math.round(bps / (k * k)) + "M";
+  return Math.round(bps / (k * k * k)) + "G";
 }
 
 function updateDockBadge() {
@@ -96,14 +96,14 @@ function updateDockBadge() {
     if (t.progress > bestProgress) bestProgress = t.progress;
   }
 
-  // Badge shows down/up speeds with arrows (macOS dock badge is always red — system limitation)
+  // Badge shows down/up speeds (macOS dock badge is very small — keep it compact)
   if (process.platform === "darwin" && app.dock) {
     const dl = formatSpeedBadge(totalDl);
     const ul = formatSpeedBadge(totalUl);
     let badge = "";
-    if (dl) badge += "\u2193" + dl;
-    if (ul) badge += (badge ? " " : "") + "\u2191" + ul;
-    app.dock.setBadge(badge || " ");
+    if (dl) badge += dl;
+    if (ul) badge += (badge ? "/" : "") + ul;
+    app.dock.setBadge(badge || "");
   }
 
   // Progress bar under dock/taskbar icon
