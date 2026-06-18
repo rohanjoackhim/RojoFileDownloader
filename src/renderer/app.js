@@ -666,6 +666,85 @@ $("btnSpeedTest").addEventListener("click", async () => {
   }
 });
 
+// ---------- File Picker ----------
+
+let pendingFilePickerInfoHash = null;
+
+function showFilePickerModal(data) {
+  pendingFilePickerInfoHash = data.infoHash;
+  $("filePickerTitle").textContent = `Select Files — ${data.name}`;
+  $("filePickerHint").textContent = `${data.fileList.length} files available`;
+
+  const listEl = $("filePickerList");
+  listEl.innerHTML = "";
+
+  data.fileList.forEach((file) => {
+    const item = document.createElement("label");
+    item.className = "file-picker-item";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.dataset.index = file.index;
+    checkbox.className = "file-picker-checkbox";
+
+    const info = document.createElement("div");
+    info.className = "file-picker-info";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "file-picker-name";
+    nameEl.textContent = file.name;
+
+    const sizeEl = document.createElement("span");
+    sizeEl.className = "file-picker-size";
+    sizeEl.textContent = formatBytes(file.length);
+
+    info.appendChild(nameEl);
+    info.appendChild(sizeEl);
+    item.appendChild(checkbox);
+    item.appendChild(info);
+    listEl.appendChild(item);
+  });
+
+  $("filePickerModal").classList.add("show");
+}
+
+function hideFilePickerModal() {
+  $("filePickerModal").classList.remove("show");
+  pendingFilePickerInfoHash = null;
+}
+
+$("btnCancelFilePicker").addEventListener("click", async () => {
+  if (pendingFilePickerInfoHash) {
+    await rojoAPI.cancelFileSelection(pendingFilePickerInfoHash);
+  }
+  hideFilePickerModal();
+});
+
+$("btnConfirmFilePicker").addEventListener("click", async () => {
+  if (!pendingFilePickerInfoHash) return;
+  const checkboxes = $("filePickerList").querySelectorAll(".file-picker-checkbox");
+  const selectedIndices = [];
+  checkboxes.forEach((cb) => {
+    if (cb.checked) selectedIndices.push(parseInt(cb.dataset.index));
+  });
+  if (selectedIndices.length === 0) {
+    showToast("Please select at least one file", "error");
+    return;
+  }
+  const result = await rojoAPI.confirmFileSelection(pendingFilePickerInfoHash, selectedIndices);
+  if (result.ok) {
+    showToast(`Added: ${result.name} (${selectedIndices.length} files)`);
+  } else {
+    showToast(`Error: ${result.error}`, "error");
+  }
+  hideFilePickerModal();
+});
+
+rojoAPI.onShowFilePicker((data) => {
+  showFilePickerModal(data);
+});
+
 function updateDefaultStar(isDefault) {
   $("btnSetDefault").classList.toggle("is-default", isDefault);
 }

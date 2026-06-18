@@ -814,6 +814,60 @@ html, body {
   color: var(--error);
 }
 
+/* File Picker */
+.file-picker-list {
+  max-height: 320px;
+  overflow-y: auto;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+  background: var(--bg);
+}
+
+.file-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+  margin-bottom: 2px;
+}
+
+.file-picker-item:hover {
+  background: var(--bg-hover);
+}
+
+.file-picker-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.file-picker-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.file-picker-name {
+  font-size: 0.82rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-picker-size {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;

@@ -144,6 +144,20 @@
     </div>
   </div>
 
+  <!-- File Selection Dialog -->
+  <div id="filePickerModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-content--wide">
+      <h3 id="filePickerTitle">Select Files to Download</h3>
+      <p class="modal-hint" id="filePickerHint">Check the files you want to download</p>
+      <div id="filePickerList" class="file-picker-list"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btnCancelFilePicker">Cancel</button>
+        <button class="btn btn-primary" id="btnConfirmFilePicker">Download Selected</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Context Menu -->
   <div id="contextMenu" class="context-menu">
     <div class="ctx-item" data-action="copy-magnet">Copy Magnet URI</div>

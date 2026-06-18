@@ -60,6 +60,7 @@ const ROJO_CONFIG = {
 let win;
 let client;
 const activeTorrents = new Map();
+const pendingFileSelection = new Map(); // infoHash -> { torrent, displayName, downloadPath, magnetUri?, torrentFilePath? }
 let isMinimized = false;
 let isQuitting = false;
 let restartStatsLoop = null; // called when window is recreated after being closed
@@ -426,23 +427,53 @@ async function handleAddMagnet(magnetUri) {
           path: downloadPath,
           announce: ROJO_CONFIG.announce,
         }, (t) => {
-          console.log(`[RO^JO] Metadata received for torrent: ${t.name}, infoHash=${t.infoHash}`);
-          const actualPath = path.join(downloadPath, t.name);
-          activeTorrents.set(t.infoHash, {
-            name: displayName || t.name,
-            infoHash: t.infoHash,
-            progress: 0,
-            speed: 0,
-            peers: 0,
-            status: "downloading",
-            path: actualPath,
-            addedAt: Date.now(),
-            downloaded: 0,
-            length: t.length || 0,
-            magnetUri: magnetUri,
+          console.log(`[RO^JO] Metadata received for torrent: ${t.name}, infoHash=${t.infoHash}, files=${t.files.length}`);
+          // Deselect all files initially, then show file picker
+          t.files.forEach(f => f.deselect());
+
+          // If single file, auto-select it and add immediately
+          if (t.files.length <= 1) {
+            if (t.files[0]) t.files[0].select();
+            const actualPath = path.join(downloadPath, t.name);
+            activeTorrents.set(t.infoHash, {
+              name: displayName || t.name,
+              infoHash: t.infoHash,
+              progress: 0,
+              speed: 0,
+              peers: 0,
+              status: "downloading",
+              path: actualPath,
+              addedAt: Date.now(),
+              downloaded: 0,
+              length: t.length || 0,
+              magnetUri: magnetUri,
+            });
+            console.log(`[RO^JO] Added single-file torrent to activeTorrents: ${t.infoHash}`);
+            if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: displayName || t.name }); }
+            return;
+          }
+
+          // Multiple files: store in pending and show file picker
+          const fileList = t.files.map((f, i) => ({
+            index: i,
+            name: f.name,
+            path: f.path,
+            length: f.length,
+          }));
+          pendingFileSelection.set(t.infoHash, {
+            torrent: t,
+            displayName: displayName || t.name,
+            downloadPath,
+            magnetUri,
+            fileList,
           });
-          console.log(`[RO^JO] Added to activeTorrents: ${t.infoHash}, total activeTorrents=${activeTorrents.size}`);
-          if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: displayName || t.name }); }
+          console.log(`[RO^JO] Showing file picker for ${t.name} with ${fileList.length} files`);
+          broadcast("show-file-picker", {
+            infoHash: t.infoHash,
+            name: displayName || t.name,
+            fileList,
+          });
+          if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: displayName || t.name, filePicker: true }); }
         });
         console.log(`[RO^JO] Torrent added to client, waiting for metadata...`);
       } catch (err) {
@@ -494,7 +525,10 @@ async function handleAddTorrentFile(buffer) {
           announce: ROJO_CONFIG.announce,
         }, (t) => {
           const actualPath = path.join(downloadPath, t.name);
-          console.log(`[RO^JO] Torrent ready: name="${t.name}", infoHash=${t.infoHash}, path=${actualPath}`);
+          console.log(`[RO^JO] Torrent ready: name="${t.name}", infoHash=${t.infoHash}, files=${t.files.length}`);
+          // Deselect all files initially
+          t.files.forEach(f => f.deselect());
+
           // Save .torrent file buffer for persistence
           const torrentFilePath = path.join(TORRENTS_FILES_DIR, `${t.infoHash}.torrent`);
           try {
@@ -503,20 +537,47 @@ async function handleAddTorrentFile(buffer) {
             console.error("[RO^JO] Failed to save .torrent file:", e.message);
           }
 
-          activeTorrents.set(t.infoHash, {
-            name: t.name,
-            infoHash: t.infoHash,
-            progress: 0,
-            speed: 0,
-            peers: 0,
-            status: "downloading",
-            path: actualPath,
-            addedAt: Date.now(),
-            downloaded: 0,
-            length: t.length || 0,
-            torrentFilePath: torrentFilePath,
+          // If single file, auto-select and add immediately
+          if (t.files.length <= 1) {
+            if (t.files[0]) t.files[0].select();
+            activeTorrents.set(t.infoHash, {
+              name: t.name,
+              infoHash: t.infoHash,
+              progress: 0,
+              speed: 0,
+              peers: 0,
+              status: "downloading",
+              path: actualPath,
+              addedAt: Date.now(),
+              downloaded: 0,
+              length: t.length || 0,
+              torrentFilePath: torrentFilePath,
+            });
+            if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: t.name }); }
+            return;
+          }
+
+          // Multiple files: store pending and show file picker
+          const fileList = t.files.map((f, i) => ({
+            index: i,
+            name: f.name,
+            path: f.path,
+            length: f.length,
+          }));
+          pendingFileSelection.set(t.infoHash, {
+            torrent: t,
+            displayName: t.name,
+            downloadPath,
+            torrentFilePath,
+            fileList,
           });
-          if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: t.name }); }
+          console.log(`[RO^JO] Showing file picker for ${t.name} with ${fileList.length} files`);
+          broadcast("show-file-picker", {
+            infoHash: t.infoHash,
+            name: t.name,
+            fileList,
+          });
+          if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: t.name, filePicker: true }); }
         });
       } catch (err) {
         if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
@@ -995,6 +1056,57 @@ ipcMain.handle("speed-test", async () => {
     };
   } catch (e) {
     console.error("[RO^JO] Speed test error:", e.message);
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+// Confirm file selection from torrent file picker
+ipcMain.handle("confirm-file-selection", async (_evt, infoHash, selectedIndices) => {
+  const pending = pendingFileSelection.get(infoHash);
+  if (!pending) return { ok: false, error: "Torrent no longer pending" };
+
+  try {
+    const t = pending.torrent;
+    // Select only the checked files
+    selectedIndices.forEach(idx => {
+      if (t.files[idx]) t.files[idx].select();
+    });
+
+    // Add to active torrents
+    const actualPath = path.join(pending.downloadPath, t.name);
+    activeTorrents.set(infoHash, {
+      name: pending.displayName || t.name,
+      infoHash: infoHash,
+      progress: 0,
+      speed: 0,
+      peers: 0,
+      status: "downloading",
+      path: actualPath,
+      addedAt: Date.now(),
+      downloaded: 0,
+      length: t.length || 0,
+      magnetUri: pending.magnetUri,
+      torrentFilePath: pending.torrentFilePath,
+    });
+    pendingFileSelection.delete(infoHash);
+    console.log(`[RO^JO] File selection confirmed for ${infoHash}, selected ${selectedIndices.length} files`);
+    return { ok: true, infoHash, name: pending.displayName || t.name };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+// Cancel file selection and remove torrent
+ipcMain.handle("cancel-file-selection", async (_evt, infoHash) => {
+  const pending = pendingFileSelection.get(infoHash);
+  if (!pending) return { ok: true };
+
+  try {
+    client.remove(pending.torrent);
+    pendingFileSelection.delete(infoHash);
+    console.log(`[RO^JO] File selection cancelled for ${infoHash}, torrent removed`);
+    return { ok: true };
+  } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 });

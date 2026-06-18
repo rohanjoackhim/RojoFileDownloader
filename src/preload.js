@@ -37,6 +37,10 @@ contextBridge.exposeInMainWorld("rojoAPI", {
   // Speed test
   speedTest: () => ipcRenderer.invoke("speed-test"),
 
+  // File selection
+  confirmFileSelection: (infoHash, selectedIndices) => ipcRenderer.invoke("confirm-file-selection", infoHash, selectedIndices),
+  cancelFileSelection: (infoHash) => ipcRenderer.invoke("cancel-file-selection", infoHash),
+
   // Event listeners
   onTorrentsUpdated: (callback) => {
     ipcRenderer.on("torrents-updated", (_event, data) => callback(data));
@@ -52,5 +56,8 @@ contextBridge.exposeInMainWorld("rojoAPI", {
   },
   onTorrentRemoved: (callback) => {
     ipcRenderer.on("torrent-removed", (_event, data) => callback(data));
+  },
+  onShowFilePicker: (callback) => {
+    ipcRenderer.on("show-file-picker", (_event, data) => callback(data));
   },
 });
