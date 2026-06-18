@@ -6,10 +6,14 @@ const os = require("os");
 // Import VPN module from local copy
 let vpn;
 try {
-  vpn = require("../vpn/index.cjs");
+  const vpnPath = path.join(__dirname, "../vpn/index.cjs");
+  console.log("[RO^JO] Attempting to load VPN module from:", vpnPath);
+  console.log("[RO^JO] VPN file exists:", fs.existsSync(vpnPath));
+  vpn = require(vpnPath);
   console.log("[RO^JO] VPN module loaded successfully");
 } catch (e) {
-  console.warn("[RO^JO] VPN module not available:", e.message);
+  console.error("[RO^JO] VPN module not available:", e.message);
+  console.error("[RO^JO] Full error:", e);
   vpn = null;
 }
 
