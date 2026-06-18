@@ -186,7 +186,7 @@ function updateTorrentElement(refs, t) {
   if (last.name !== t.name) refs.nameEl.textContent = t.name || "--";
   if (last.status !== t.status) {
     refs.badge.className = "status-badge " + statusClass;
-    refs.badge.textContent = t.status;
+    refs.badge.textContent = t.status === "completed" ? "100%" : t.status;
   }
   if (last.size !== sizeText) refs.sizeEl.textContent = sizeText;
   if (last.peers !== peersText) refs.peersEl.textContent = peersText;
@@ -202,7 +202,7 @@ function updateTorrentElement(refs, t) {
   const isDone = t.status === "completed";
   const hash = t.infoHash;
 
-  // Update icon text with percentage or "Done"
+  // Update icon text with percentage or "Done" when complete
   const iconText = isDone ? "Done" : pct + "%";
   if (last.iconText !== iconText) refs.iconText.textContent = iconText;
   refs._last = { name: t.name, status: t.status, pct, size: sizeText, peers: peersText, speed: speedText, eta: etaText, fillClass, iconText };
