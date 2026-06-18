@@ -24,6 +24,7 @@
     "files": [
       "src/**/*",
       "assets/**/*",
+      "vpn/**/*",
       "node_modules/**/*"
     ],
     "mac": {
