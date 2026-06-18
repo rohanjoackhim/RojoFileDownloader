@@ -73,8 +73,7 @@
     ]
   },
   "dependencies": {
-    "webtorrent": "^2.4.29",
-    "speedtest-net": "^2.2.0"
+    "webtorrent": "^2.4.29"
   },
   "devDependencies": {
     "electron": "^31.0.0",

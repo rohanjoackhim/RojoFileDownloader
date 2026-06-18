@@ -1045,25 +1045,97 @@ ipcMain.handle("vpn-load-config", async () => {
   }
 });
 
-// Internet speed test using speedtest-net for accurate download and upload measurement
+// Internet speed test using pure Node.js HTTPS (works on all platforms including arm64)
+function measurePing(hostname, path) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const req = require("https").request({ hostname, path, method: "HEAD", timeout: 5000 }, (res) => {
+      res.on("data", () => {});
+      res.on("end", () => resolve(Date.now() - start));
+    });
+    req.on("error", () => resolve(999));
+    req.on("timeout", () => { req.destroy(); resolve(999); });
+    req.end();
+  });
+}
+
+function downloadSpeedTest(bytes) {
+  return new Promise((resolve, reject) => {
+    const url = `https://speed.cloudflare.com/__down?bytes=${bytes}`;
+    const start = Date.now();
+    let received = 0;
+    const req = require("https").get(url, { timeout: 30000 }, (res) => {
+      res.on("data", (chunk) => { received += chunk.length; });
+      res.on("end", () => {
+        const elapsedSec = (Date.now() - start) / 1000;
+        const bps = received * 8 / elapsedSec;
+        resolve({ bps, received, elapsedSec });
+      });
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("Download timeout")); });
+  });
+}
+
+function uploadSpeedTest(bytes) {
+  return new Promise((resolve, reject) => {
+    const data = Buffer.alloc(bytes, 0x00);
+    const start = Date.now();
+    const req = require("https").request({
+      hostname: "speed.cloudflare.com",
+      path: "/__up",
+      method: "POST",
+      headers: { "Content-Length": bytes, "Content-Type": "application/octet-stream" },
+      timeout: 30000
+    }, (res) => {
+      res.on("data", () => {});
+      res.on("end", () => {
+        const elapsedSec = (Date.now() - start) / 1000;
+        const bps = bytes * 8 / elapsedSec;
+        resolve({ bps, elapsedSec });
+      });
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("Upload timeout")); });
+    req.write(data);
+    req.end();
+  });
+}
+
 ipcMain.handle("speed-test", async () => {
   try {
-    const { default: speedTest } = await import("speedtest-net");
-    const result = await speedTest({ acceptLicense: true, acceptGdpr: true });
-    
-    const downloadMbps = (result.download.bandwidth * 8) / 1000000;
-    const uploadMbps = (result.upload.bandwidth * 8) / 1000000;
-    
+    // Measure ping (average of 3 requests to 1.1.1.1)
+    const pings = await Promise.all([
+      measurePing("1.1.1.1", "/"),
+      measurePing("1.1.1.1", "/"),
+      measurePing("1.1.1.1", "/")
+    ]);
+    const validPings = pings.filter(p => p < 999);
+    const avgPing = validPings.length ? Math.round(validPings.reduce((a, b) => a + b, 0) / validPings.length) : 0;
+
+    // Download test (~25MB)
+    const dl = await downloadSpeedTest(25000000);
+    const downloadMbps = dl.bps / 1000000;
+
+    // Upload test (~5MB)
+    let uploadMbps = 0;
+    try {
+      const ul = await uploadSpeedTest(5000000);
+      uploadMbps = ul.bps / 1000000;
+    } catch (ulErr) {
+      console.warn("[RO^JO] Upload test failed:", ulErr.message);
+    }
+
     return {
       ok: true,
       downloadSpeed: downloadMbps.toFixed(2),
       uploadSpeed: uploadMbps.toFixed(2),
       downloadSpeedFormatted: downloadMbps.toFixed(2) + " Mbps",
       uploadSpeedFormatted: uploadMbps.toFixed(2) + " Mbps",
-      ping: result.ping.latency + " ms",
-      jitter: result.ping.jitter + " ms",
-      server: result.server.name + " (" + result.server.location + ")",
-      duration: result.result.duration ? (result.result.duration / 1000).toFixed(2) : "N/A"
+      ping: avgPing + " ms",
+      jitter: validPings.length > 1 ? Math.round(Math.max(...validPings) - Math.min(...validPings)) + " ms" : "N/A",
+      server: "Cloudflare",
+      duration: dl.elapsedSec.toFixed(2) + "s"
     };
   } catch (e) {
     console.error("[RO^JO] Speed test error:", e.message);
