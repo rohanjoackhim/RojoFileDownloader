@@ -427,6 +427,21 @@ async function addMagnet() {
       showToast(`Added: ${result.name}`);
       closeModal();
       input.value = "";
+    } else if (result.duplicate) {
+      // Show confirmation dialog to replace existing torrent
+      if (confirm(`"${result.name}" is already in your download list.\n\nDo you want to remove the old one and add it again?`)) {
+        // Remove the existing torrent
+        await rojoAPI.removeTorrent(result.infoHash, true);
+        // Add the new one
+        const retryResult = await rojoAPI.addMagnet(magnet);
+        if (retryResult.ok) {
+          showToast(`Replaced: ${retryResult.name}`);
+          closeModal();
+          input.value = "";
+        } else {
+          $("magnetError").textContent = retryResult.error || "Failed to add torrent";
+        }
+      }
     } else {
       $("magnetError").textContent = result.error || "Failed to add torrent";
     }
@@ -598,7 +613,16 @@ dropZone.addEventListener("drop", async (e) => {
       if (text.trim().startsWith("magnet:")) {
         const res = await rojoAPI.addMagnet(text.trim());
         if (res.ok) showToast(`Added: ${res.name}`);
-        else showToast(res.error || "Failed to add", "error");
+        else if (res.duplicate) {
+          if (confirm(`"${res.name}" is already in your download list.\n\nDo you want to remove the old one and add it again?`)) {
+            await rojoAPI.removeTorrent(res.infoHash, true);
+            const retryResult = await rojoAPI.addMagnet(text.trim());
+            if (retryResult.ok) showToast(`Replaced: ${retryResult.name}`);
+            else showToast(retryResult.error || "Failed to add", "error");
+          }
+        } else {
+          showToast(res.error || "Failed to add", "error");
+        }
       }
     }
   }

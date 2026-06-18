@@ -322,8 +322,15 @@ async function handleAddMagnet(magnetUri) {
         });
         return { ok: true, infoHash: existingTorrent.infoHash, name: displayName || existingTorrent.name };
       } else {
-        console.log(`[RO^JO] Torrent already in activeTorrents, returning error`);
-        return { ok: false, error: "This torrent is already in your download list" };
+        console.log(`[RO^JO] Torrent already in activeTorrents, asking user to replace`);
+        const entry = activeTorrents.get(existingTorrent.infoHash);
+        return { 
+          ok: false, 
+          duplicate: true, 
+          infoHash: existingTorrent.infoHash,
+          name: entry ? entry.name : existingTorrent.name,
+          error: "This torrent is already in your download list" 
+        };
       }
     }
 
@@ -881,7 +888,22 @@ app.on("open-url", async (event, url) => {
       if (win.isMinimized()) win.restore();
       win.focus();
     }
-    await handleAddMagnet(url);
+    const result = await handleAddMagnet(url);
+    if (result.duplicate) {
+      const { response } = await dialog.showMessageBox(win, {
+        type: "question",
+        buttons: ["Cancel", "Replace"],
+        defaultId: 1,
+        title: "Duplicate Torrent",
+        message: `"${result.name}" is already in your download list.`,
+        detail: "Do you want to remove the old one and add it again?",
+      });
+      if (response === 1) {
+        // User clicked Replace
+        await removeTorrent(result.infoHash, true);
+        await handleAddMagnet(url);
+      }
+    }
   }
 });
 
