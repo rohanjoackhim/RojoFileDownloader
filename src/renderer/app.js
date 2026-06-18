@@ -119,6 +119,9 @@ function createTorrentElement(t) {
   const icon = document.createElement("div");
   icon.className = "torrent-icon";
   icon.innerHTML = TORRENT_SVG;
+  const iconText = document.createElement("span");
+  iconText.className = "torrent-icon-text";
+  icon.appendChild(iconText);
   el.appendChild(icon);
 
   const info = document.createElement("div");
@@ -167,7 +170,7 @@ function createTorrentElement(t) {
 
   return {
     el,
-    refs: { nameEl, badge, pctEl, sizeEl, peersEl, speedEl, etaEl, fill, actions },
+    refs: { nameEl, badge, pctEl, sizeEl, peersEl, speedEl, etaEl, fill, actions, iconText },
   };
 }
 
@@ -198,7 +201,10 @@ function updateTorrentElement(refs, t) {
     refs.fill.className = "progress-fill " + fillClass;
     refs.fill.style.width = pct + "%";
   }
-  refs._last = { name: t.name, status: t.status, pct, size: sizeText, peers: peersText, speed: speedText, eta: etaText, fillClass };
+  // Update icon text with percentage or "Done"
+  const iconText = isDone ? "Done" : pct + "%";
+  if (last.iconText !== iconText) refs.iconText.textContent = iconText;
+  refs._last = { name: t.name, status: t.status, pct, size: sizeText, peers: peersText, speed: speedText, eta: etaText, fillClass, iconText };
 
   // Rebuild action buttons only when status changes
   const isActive = t.status === "downloading" || t.status === "paused";
