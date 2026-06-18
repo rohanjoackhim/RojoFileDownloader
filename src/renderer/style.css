@@ -164,10 +164,10 @@ html, body {
 }
 
 .btn-primary {
-  background: var(--accent);
+  background: #22c55e;
   color: white;
 }
-.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:hover { background: #16a34a; }
 
 .btn-secondary:hover { background: #1a1a33; }
 
@@ -176,8 +176,8 @@ html, body {
   stroke: #555577;
 }
 #btnSetDefault.is-default svg {
-  fill: #ff4d8d;
-  stroke: #ff4d8d;
+  fill: #22c55e;
+  stroke: #22c55e;
 }
 
 .btn-danger {
