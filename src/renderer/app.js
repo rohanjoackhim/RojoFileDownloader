@@ -5,6 +5,10 @@ let selectedHash = null;
 let contextHash = null;
 let torrentOrder = []; // array of infoHashes in display order
 const torrentLogs = new Map(); // infoHash -> array of log lines
+const torrentElements = new Map(); // infoHash -> { el, refs }
+
+// SVG icon for torrent items (reused)
+const TORRENT_SVG = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`;
 
 // ---------- UI Helpers ----------
 
@@ -87,6 +91,120 @@ function updateDetailPanel(t) {
 
 // ---------- Torrent List Rendering ----------
 
+function createTorrentElement(t) {
+  const el = document.createElement("div");
+  el.className = "torrent-item";
+  el.dataset.hash = t.infoHash;
+  el.addEventListener("click", () => selectTorrent(t.infoHash));
+  el.addEventListener("contextmenu", (e) => showContextMenu(e, t.infoHash));
+
+  const icon = document.createElement("div");
+  icon.className = "torrent-icon";
+  icon.innerHTML = TORRENT_SVG;
+  el.appendChild(icon);
+
+  const info = document.createElement("div");
+  info.className = "torrent-info";
+
+  const nameEl = document.createElement("div");
+  nameEl.className = "torrent-name";
+  info.appendChild(nameEl);
+
+  const meta = document.createElement("div");
+  meta.className = "torrent-meta";
+
+  const badge = document.createElement("span");
+  badge.className = "status-badge";
+  meta.appendChild(badge);
+
+  const pctEl = document.createElement("span");
+  meta.appendChild(pctEl);
+
+  const sizeEl = document.createElement("span");
+  meta.appendChild(sizeEl);
+
+  const peersEl = document.createElement("span");
+  meta.appendChild(peersEl);
+
+  const speedEl = document.createElement("span");
+  meta.appendChild(speedEl);
+
+  info.appendChild(meta);
+
+  const bar = document.createElement("div");
+  bar.className = "progress-bar";
+  const fill = document.createElement("div");
+  fill.className = "progress-fill";
+  bar.appendChild(fill);
+  info.appendChild(bar);
+
+  el.appendChild(info);
+
+  const actions = document.createElement("div");
+  actions.className = "torrent-actions";
+  el.appendChild(actions);
+
+  return {
+    el,
+    refs: { nameEl, badge, pctEl, sizeEl, peersEl, speedEl, fill, actions },
+  };
+}
+
+function updateTorrentElement(refs, t) {
+  const pct = Math.round((t.progress || 0) * 100);
+  const statusClass = t.status === "completed" ? "status-completed" :
+                      t.status === "paused" ? "status-paused" : "status-downloading";
+  const fillClass = t.status === "completed" ? "completed" : "";
+
+  refs.nameEl.textContent = t.name || "--";
+  refs.badge.className = "status-badge " + statusClass;
+  refs.badge.textContent = t.status;
+  refs.pctEl.textContent = pct + "%";
+  refs.sizeEl.textContent = `${formatBytes(t.downloaded || 0)} / ${formatBytes(t.length || 0)}`;
+  refs.peersEl.textContent = (t.peers || 0) + " peers";
+  refs.speedEl.textContent = formatSpeed(t.speed || 0);
+  refs.fill.className = "progress-fill " + fillClass;
+  refs.fill.style.width = pct + "%";
+
+  // Rebuild action buttons only when status changes
+  const isActive = t.status === "downloading" || t.status === "paused";
+  const isPaused = t.status === "paused";
+  const isDone = t.status === "completed";
+  const hash = t.infoHash;
+
+  const existingStatus = refs.actions.dataset.status;
+  const newStatus = t.status;
+  if (existingStatus !== newStatus) {
+    refs.actions.dataset.status = newStatus;
+    refs.actions.innerHTML = "";
+    if (isActive && !isDone) {
+      const btn = document.createElement("button");
+      btn.className = "btn-small " + (isPaused ? "btn-resume" : "btn-pause");
+      btn.textContent = isPaused ? "Resume" : "Pause";
+      btn.addEventListener("click", (e) => { e.stopPropagation(); isPaused ? resumeTorrent(hash) : pauseTorrent(hash); });
+      refs.actions.appendChild(btn);
+    }
+    const folderBtn = document.createElement("button");
+    folderBtn.className = "btn-small btn-folder";
+    folderBtn.title = "Open folder";
+    folderBtn.textContent = "\u{1F4C1}";
+    folderBtn.addEventListener("click", (e) => { e.stopPropagation(); openTorrentFolder(hash); });
+    refs.actions.appendChild(folderBtn);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "btn-small btn-remove";
+    removeBtn.textContent = "Remove";
+    removeBtn.addEventListener("click", (e) => { e.stopPropagation(); removeTorrent(hash); });
+    refs.actions.appendChild(removeBtn);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "btn-small btn-delete-files";
+    deleteBtn.textContent = "Delete";
+    deleteBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteWithFiles(hash); });
+    refs.actions.appendChild(deleteBtn);
+  }
+}
+
 function renderTorrents() {
   const listEl = $("torrentList");
   const emptyEl = $("emptyState");
@@ -97,6 +215,11 @@ function renderTorrents() {
     emptyEl.style.display = "block";
     dropEl.style.display = "block";
     $("detailPanel").style.display = "none";
+    // Clean up cached elements
+    for (const [hash, { el }] of torrentElements) {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    }
+    torrentElements.clear();
     return;
   }
 
@@ -104,7 +227,7 @@ function renderTorrents() {
   emptyEl.style.display = "none";
   dropEl.style.display = "none";
 
-  // Apply custom order if set
+  // Apply custom order
   let displayTorrents = torrents;
   if (torrentOrder.length > 0) {
     const orderMap = new Map(torrentOrder.map((h, i) => [h, i]));
@@ -115,53 +238,36 @@ function renderTorrents() {
     });
   }
 
-  listEl.innerHTML = displayTorrents.map((t) => {
-    const pct = Math.round((t.progress || 0) * 100);
-    const statusClass = t.status === "completed" ? "status-completed" :
-                        t.status === "paused" ? "status-paused" : "status-downloading";
-    const fillClass = t.status === "completed" ? "completed" : "";
-    const isSelected = t.infoHash === selectedHash;
+  const currentHashes = new Set(displayTorrents.map(t => t.infoHash));
+  const domHashes = new Set(torrentElements.keys());
 
-    const isActive = t.status === "downloading" || t.status === "paused";
-    const isPaused = t.status === "paused";
-    const isDone = t.status === "completed";
-
-    let actionButtons = "";
-    if (isActive && !isDone) {
-      if (isPaused) {
-        actionButtons += `<button class="btn-small btn-resume" onclick="event.stopPropagation(); resumeTorrent('${t.infoHash}')">Resume</button>`;
-      } else {
-        actionButtons += `<button class="btn-small btn-pause" onclick="event.stopPropagation(); pauseTorrent('${t.infoHash}')">Pause</button>`;
-      }
+  // Remove elements for torrents no longer in list
+  for (const hash of domHashes) {
+    if (!currentHashes.has(hash)) {
+      const { el } = torrentElements.get(hash);
+      if (el.parentNode) el.parentNode.removeChild(el);
+      torrentElements.delete(hash);
     }
-    actionButtons += `<button class="btn-small btn-folder" onclick="event.stopPropagation(); openTorrentFolder('${t.infoHash}')" title="Open folder">\u{1F4C1}</button>`;
-    actionButtons += `<button class="btn-small btn-remove" onclick="event.stopPropagation(); removeTorrent('${t.infoHash}')">Remove</button>`;
-    actionButtons += `<button class="btn-small btn-delete-files" onclick="event.stopPropagation(); deleteWithFiles('${t.infoHash}')">Delete</button>`;
+  }
 
-    return `
-      <div class="torrent-item ${isSelected ? "selected" : ""}" data-hash="${t.infoHash}" onclick="selectTorrent('${t.infoHash}')" oncontextmenu="showContextMenu(event, '${t.infoHash}')">
-        <div class="torrent-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        </div>
-        <div class="torrent-info">
-          <div class="torrent-name">${escapeHtml(t.name)}</div>
-          <div class="torrent-meta">
-            <span class="status-badge ${statusClass}">${t.status}</span>
-            <span>${pct}%</span>
-            <span>${formatBytes(t.downloaded || 0)} / ${formatBytes(t.length || 0)}</span>
-            <span>${t.peers || 0} peers</span>
-            <span>${formatSpeed(t.speed || 0)}</span>
-          </div>
-          <div class="progress-bar">
-            <div class="progress-fill ${fillClass}" style="width:${pct}%"></div>
-          </div>
-        </div>
-        <div class="torrent-actions">
-          ${actionButtons}
-        </div>
-      </div>
-    `;
-  }).join("");
+  // Add/update elements
+  for (const t of displayTorrents) {
+    let item = torrentElements.get(t.infoHash);
+    if (!item) {
+      item = createTorrentElement(t);
+      torrentElements.set(t.infoHash, item);
+    }
+    updateTorrentElement(item.refs, t);
+    item.el.classList.toggle("selected", t.infoHash === selectedHash);
+  }
+
+  // Re-order DOM to match display order (only when order changed)
+  for (const t of displayTorrents) {
+    const item = torrentElements.get(t.infoHash);
+    if (item.el.parentNode !== listEl || item.el.nextSibling !== (displayTorrents[displayTorrents.indexOf(t) + 1] ? torrentElements.get(displayTorrents[displayTorrents.indexOf(t) + 1].infoHash)?.el : null)) {
+      listEl.appendChild(item.el);
+    }
+  }
 
   // Update detail panel for selected torrent
   if (selectedHash) {
@@ -171,10 +277,99 @@ function renderTorrents() {
   }
 }
 
+// Fast incremental update: only update changed properties, never rebuild DOM
+function updateTorrentElements() {
+  const listEl = $("torrentList");
+  const emptyEl = $("emptyState");
+  const dropEl = $("dropZone");
+
+  if (!torrents.length) {
+    listEl.style.display = "none";
+    emptyEl.style.display = "block";
+    dropEl.style.display = "block";
+    $("detailPanel").style.display = "none";
+    for (const [hash, { el }] of torrentElements) {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    }
+    torrentElements.clear();
+    return;
+  }
+
+  listEl.style.display = "flex";
+  emptyEl.style.display = "none";
+  dropEl.style.display = "none";
+
+  // Build display order (skip heavy sort if no custom order)
+  const displayTorrents = torrentOrder.length > 0
+    ? [...torrents].sort((a, b) => {
+        const oa = torrentOrder.indexOf(a.infoHash);
+        const ob = torrentOrder.indexOf(b.infoHash);
+        return (oa === -1 ? 9999 : oa) - (ob === -1 ? 9999 : ob);
+      })
+    : torrents;
+
+  const currentHashes = new Set(displayTorrents.map(t => t.infoHash));
+
+  // Remove dead elements
+  for (const [hash, { el }] of [...torrentElements]) {
+    if (!currentHashes.has(hash) && el.parentNode) {
+      el.parentNode.removeChild(el);
+      torrentElements.delete(hash);
+    }
+  }
+
+  // Check if any new elements need creation (triggers full rebuild)
+  let needsAppend = false;
+  for (const t of displayTorrents) {
+    if (!torrentElements.has(t.infoHash)) {
+      needsAppend = true;
+      break;
+    }
+  }
+
+  if (needsAppend) {
+    // Full rebuild: collect all elements into fragment and replace list contents
+    const fragment = document.createDocumentFragment();
+    for (const t of displayTorrents) {
+      let item = torrentElements.get(t.infoHash);
+      if (!item) {
+        item = createTorrentElement(t);
+        torrentElements.set(t.infoHash, item);
+      }
+      updateTorrentElement(item.refs, t);
+      item.el.classList.toggle("selected", t.infoHash === selectedHash);
+      fragment.appendChild(item.el);
+    }
+    listEl.innerHTML = "";
+    listEl.appendChild(fragment);
+  } else {
+    // Fast path: only update text/property changes, zero DOM structure changes
+    for (const t of displayTorrents) {
+      const item = torrentElements.get(t.infoHash);
+      updateTorrentElement(item.refs, t);
+      item.el.classList.toggle("selected", t.infoHash === selectedHash);
+    }
+  }
+
+  // Update detail panel
+  if (selectedHash) {
+    const t = torrents.find((x) => x.infoHash === selectedHash);
+    if (t) updateDetailPanel(t);
+    else { selectedHash = null; $("detailPanel").style.display = "none"; }
+  }
+}
+
 function selectTorrent(infoHash) {
+  // Remove selected class from previous selection
+  if (selectedHash) {
+    const prev = torrentElements.get(selectedHash);
+    if (prev) prev.el.classList.remove("selected");
+  }
   selectedHash = infoHash;
+  // Add selected class to new selection
+  const curr = torrentElements.get(infoHash);
+  if (curr) curr.el.classList.add("selected");
   const t = torrents.find((x) => x.infoHash === infoHash);
-  renderTorrents();
   updateDetailPanel(t);
 }
 
@@ -566,6 +761,7 @@ $("logModal").querySelector(".modal-backdrop").addEventListener("click", closeLo
 // ---------- IPC Listeners ----------
 
 let renderPending = false;
+let lastLogTime = 0;
 rojoAPI.onTorrentsUpdated((data) => {
   torrents = data.torrents || [];
   const count = torrents.length;
@@ -577,17 +773,21 @@ rojoAPI.onTorrentsUpdated((data) => {
     renderPending = true;
     requestAnimationFrame(() => {
       renderPending = false;
-      renderTorrents();
+      updateTorrentElements();
     });
   }
-  // Log speed updates for each torrent
-  const now = new Date().toLocaleTimeString();
-  for (const t of torrents) {
-    if (!torrentLogs.has(t.infoHash)) torrentLogs.set(t.infoHash, []);
-    const log = torrentLogs.get(t.infoHash);
-    if (t.speed > 0 || t.uploadSpeed > 0) {
-      log.push(`[${now}] ${t.status} | ${formatSpeed(t.speed)} down | ${formatSpeed(t.uploadSpeed)} up | ${Math.round(t.progress*100)}% | ${t.peers} peers`);
-      if (log.length > 100) log.shift(); // keep last 100 lines
+  // Log speed updates: at most once every 5 seconds, and only when activity changes
+  const now = Date.now();
+  if (now - lastLogTime > 5000) {
+    lastLogTime = now;
+    const timeStr = new Date(now).toLocaleTimeString();
+    for (const t of torrents) {
+      if (t.speed > 0 || t.uploadSpeed > 0) {
+        if (!torrentLogs.has(t.infoHash)) torrentLogs.set(t.infoHash, []);
+        const log = torrentLogs.get(t.infoHash);
+        log.push(`[${timeStr}] ${t.status} | ${formatSpeed(t.speed)} down | ${formatSpeed(t.uploadSpeed)} up | ${Math.round(t.progress*100)}% | ${t.peers} peers`);
+        if (log.length > 100) log.shift();
+      }
     }
   }
 });
@@ -727,6 +927,6 @@ $("vpnModal").querySelector(".modal-backdrop").addEventListener("click", closeVp
 (async function init() {
   const dlPath = await rojoAPI.getDownloadPath();
   console.log("[RO^JO] Download path:", dlPath);
-  renderTorrents();
+  updateTorrentElements();
   refreshVpnStatus();
 })();
