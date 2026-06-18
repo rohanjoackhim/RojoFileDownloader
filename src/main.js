@@ -235,6 +235,14 @@ async function handleAddMagnet(magnetUri) {
     const downloadPath = await selectDownloadPath();
     if (!downloadPath) return { ok: false, error: "Download path not selected" };
 
+    // Extract display name from magnet URI so we can show the human-readable name
+    let displayName;
+    try {
+      const url = new URL(magnetUri);
+      displayName = url.searchParams.get("dn");
+      if (displayName) displayName = decodeURIComponent(displayName).replace(/\+/g, " ");
+    } catch (e) { /* ignore malformed URIs */ }
+
     return new Promise((resolve) => {
       let responded = false;
       let torrent;
@@ -245,7 +253,7 @@ async function handleAddMagnet(magnetUri) {
         }, (t) => {
           const actualPath = path.join(downloadPath, t.name);
           activeTorrents.set(t.infoHash, {
-            name: t.name,
+            name: displayName || t.name,
             infoHash: t.infoHash,
             progress: 0,
             speed: 0,
@@ -256,7 +264,7 @@ async function handleAddMagnet(magnetUri) {
             downloaded: 0,
             length: t.length || 0,
           });
-          if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: t.name }); }
+          if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: displayName || t.name }); }
         });
       } catch (err) {
         if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
@@ -270,7 +278,7 @@ async function handleAddMagnet(magnetUri) {
       torrent.on("done", () => {
         const entry = activeTorrents.get(torrent.infoHash);
         if (entry) entry.status = "completed";
-        broadcast("torrent-completed", { infoHash: torrent.infoHash, name: torrent.name });
+        broadcast("torrent-completed", { infoHash: torrent.infoHash, name: entry ? entry.name : torrent.name });
       });
 
       setTimeout(() => {
@@ -330,7 +338,7 @@ async function handleAddTorrentFile(buffer) {
       torrent.on("done", () => {
         const entry = activeTorrents.get(torrent.infoHash);
         if (entry) entry.status = "completed";
-        broadcast("torrent-completed", { infoHash: torrent.infoHash, name: torrent.name });
+        broadcast("torrent-completed", { infoHash: torrent.infoHash, name: entry ? entry.name : torrent.name });
       });
 
       setTimeout(() => {
