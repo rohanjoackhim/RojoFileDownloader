@@ -319,6 +319,7 @@ function renderTorrents() {
 
 // Fast incremental update: only update changed properties, never rebuild DOM
 function updateTorrentElements() {
+  console.log(`[Renderer] updateTorrentElements: torrents.length=${torrents.length}, torrentElements.size=${torrentElements.size}`);
   const listEl = $("torrentList");
   const emptyEl = $("emptyState");
   const dropEl = $("dropZone");
@@ -371,12 +372,15 @@ function updateTorrentElements() {
     }
   }
 
+  console.log(`[Renderer] needsAppend=${needsAppend}, displayTorrents.length=${displayTorrents.length}`);
+
   if (needsAppend) {
     // Full rebuild: collect all elements into fragment and replace list contents
     const fragment = document.createDocumentFragment();
     for (const t of displayTorrents) {
       let item = torrentElements.get(t.infoHash);
       if (!item) {
+        console.log(`[Renderer] Creating new element for torrent: ${t.name}`);
         item = createTorrentElement(t);
         torrentElements.set(t.infoHash, item);
       }
@@ -386,6 +390,7 @@ function updateTorrentElements() {
     }
     listEl.innerHTML = "";
     listEl.appendChild(fragment);
+    console.log(`[Renderer] Full rebuild complete, listEl.children.length=${listEl.children.length}`);
   } else {
     // Fast path: only update text/property changes, zero DOM structure changes
     for (const t of displayTorrents) {
@@ -820,6 +825,7 @@ let lastLogTime = 0;
 let contextMenuOpen = false;
 let lastDeadCheck = 0;
 rojoAPI.onTorrentsUpdated((data) => {
+  console.log(`[Renderer] torrents-updated received: ${data.torrents?.length || 0} torrents`);
   torrents = data.torrents || [];
   const count = torrents.length;
   const label = count === 1 ? "1 transfer" : count + " transfers";
@@ -835,6 +841,7 @@ rojoAPI.onTorrentsUpdated((data) => {
         $("statusText").textContent = label;
         $("downSpeed").textContent = down;
         $("upSpeed").textContent = up;
+        console.log(`[Renderer] Calling updateTorrentElements with ${torrents.length} torrents`);
         updateTorrentElements();
       }
     });
