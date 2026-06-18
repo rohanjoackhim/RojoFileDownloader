@@ -897,6 +897,60 @@ ipcMain.handle("vpn-load-config", async () => {
   }
 });
 
+// Internet speed test
+ipcMain.handle("speed-test", async () => {
+  const https = require("https");
+  const http = require("http");
+  
+  try {
+    // Test download speed by downloading a small file
+    const testUrl = "https://speed.cloudflare.com/__down?bytes=10000000"; // 10MB test file
+    const startTime = Date.now();
+    
+    return new Promise((resolve) => {
+      let downloadedBytes = 0;
+      
+      const protocol = testUrl.startsWith("https") ? https : http;
+      
+      const req = protocol.get(testUrl, (res) => {
+        if (res.statusCode !== 200) {
+          resolve({ ok: false, error: `HTTP ${res.statusCode}` });
+          return;
+        }
+        
+        res.on("data", (chunk) => {
+          downloadedBytes += chunk.length;
+        });
+        
+        res.on("end", () => {
+          const endTime = Date.now();
+          const durationSec = (endTime - startTime) / 1000;
+          const speedBps = downloadedBytes / durationSec;
+          const speedMbps = speedBps / 1000000;
+          
+          resolve({
+            ok: true,
+            downloadSpeed: speedMbps,
+            downloadSpeedFormatted: formatSpeed(speedBps),
+            duration: durationSec.toFixed(2)
+          });
+        });
+      });
+      
+      req.on("error", (err) => {
+        resolve({ ok: false, error: err.message });
+      });
+      
+      req.setTimeout(30000, () => {
+        req.destroy();
+        resolve({ ok: false, error: "Timeout" });
+      });
+    });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
 // Handle magnet: protocol on macOS
 app.on("open-url", async (event, url) => {
   event.preventDefault();

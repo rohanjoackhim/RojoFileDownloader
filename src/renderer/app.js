@@ -644,7 +644,27 @@ $("magnetInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") addMagnet();
 });
 $("btnOpenFile").addEventListener("click", openFile);
-$("btnOpenFolder").addEventListener("click", openFolder);
+
+$("btnSpeedTest").addEventListener("click", async () => {
+  const btn = $("btnSpeedTest");
+  const originalText = btn.querySelector("span").textContent;
+  btn.disabled = true;
+  btn.querySelector("span").textContent = "Testing...";
+  
+  try {
+    const result = await rojoAPI.speedTest();
+    if (result.ok) {
+      showToast(`Download Speed: ${result.downloadSpeedFormatted}`);
+    } else {
+      showToast(`Speed test failed: ${result.error}`, "error");
+    }
+  } catch (e) {
+    showToast(`Speed test error: ${e.message}`, "error");
+  } finally {
+    btn.disabled = false;
+    btn.querySelector("span").textContent = originalText;
+  }
+});
 
 function updateDefaultStar(isDefault) {
   $("btnSetDefault").classList.toggle("is-default", isDefault);

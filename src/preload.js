@@ -34,6 +34,9 @@ contextBridge.exposeInMainWorld("rojoAPI", {
   vpnSaveConfig: (configText) => ipcRenderer.invoke("vpn-save-config", configText),
   vpnLoadConfig: () => ipcRenderer.invoke("vpn-load-config"),
 
+  // Speed test
+  speedTest: () => ipcRenderer.invoke("speed-test"),
+
   // Event listeners
   onTorrentsUpdated: (callback) => {
     ipcRenderer.on("torrents-updated", (_event, data) => callback(data));
