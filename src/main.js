@@ -816,19 +816,21 @@ ipcMain.handle("vpn-load-config", async () => {
 });
 
 // Handle magnet: protocol on macOS
-app.on("open-url", (_event, url) => {
+app.on("open-url", async (event, url) => {
+  event.preventDefault();
   console.log(`[RO^JO] open-url: ${url.substring(0, 80)}...`);
   if (url.startsWith("magnet:")) {
     if (win) {
       if (win.isMinimized()) win.restore();
       win.focus();
     }
-    handleAddMagnet(url);
+    await handleAddMagnet(url);
   }
 });
 
 // Handle files dropped on dock on macOS
-app.on("open-file", (_event, filePath) => {
+app.on("open-file", async (event, filePath) => {
+  event.preventDefault();
   console.log(`[RO^JO] open-file: ${filePath}`);
   if (filePath.endsWith(".torrent")) {
     if (win) {
@@ -838,7 +840,7 @@ app.on("open-file", (_event, filePath) => {
     try {
       const buf = fs.readFileSync(filePath);
       console.log(`[RO^JO] Read .torrent file: ${buf.length} bytes`);
-      handleAddTorrentFile(buf);
+      await handleAddTorrentFile(buf);
     } catch (e) {
       console.error(`[RO^JO] Failed to read .torrent file: ${e.message}`);
     }
