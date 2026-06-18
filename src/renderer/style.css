@@ -885,7 +885,49 @@ html, body {
   width: 460px;
   padding: 18px 20px;
   border: 2px solid #c0c0c0;
+  background: rgba(30,30,30,0.95);
   box-shadow: 0 0 0 1px rgba(255,255,255,0.1), 0 20px 60px rgba(0,0,0,0.5);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Subtle warm glow behind VPN modal (from picture) */
+#vpnModal .modal-content::before {
+  content: "";
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  bottom: -40px;
+  left: -40px;
+  background: radial-gradient(circle, rgba(255,107,53,0.12) 0%, transparent 70%);
+  filter: blur(40px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Subtle cool glow behind VPN modal (from picture) */
+#vpnModal .modal-content::after {
+  content: "";
+  position: absolute;
+  width: 160px;
+  height: 160px;
+  top: -30px;
+  right: -30px;
+  background: radial-gradient(circle, rgba(79,172,254,0.1) 0%, transparent 70%);
+  filter: blur(35px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+#vpnModal .modal-header,
+#vpnModal .modal-hint,
+#vpnModal textarea,
+#vpnModal .vpn-split-section,
+#vpnModal .vpn-actions,
+#vpnModal .error-msg,
+#vpnModal .success-msg {
+  position: relative;
+  z-index: 1;
 }
 
 .modal-header {
@@ -913,7 +955,8 @@ html, body {
   align-items: center;
   justify-content: center;
   border-radius: 4px;
-  transition: all 0.15s;
+  position: relative;
+  z-index: 10;
 }
 
 .modal-close:hover {
@@ -930,8 +973,8 @@ html, body {
 }
 
 .btn-import {
-  background: transparent;
-  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.12);
   color: var(--text);
   padding: 6px 12px;
   font-size: 0.72rem;
@@ -941,12 +984,11 @@ html, body {
   margin-bottom: 12px;
   border-radius: var(--radius);
   cursor: pointer;
-  transition: all 0.15s;
 }
 
 .btn-import:hover {
-  background: var(--bg-hover);
-  border-color: var(--text-muted);
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(255,255,255,0.2);
 }
 
 #vpnModal .modal-hint {
@@ -960,6 +1002,19 @@ html, body {
   padding: 8px 10px;
   font-size: 0.8rem;
   line-height: 1.5;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius);
+  color: var(--text);
+  outline: none;
+  width: 100%;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+#vpnModal textarea:focus {
+  border-color: rgba(255,255,255,0.25);
+  background: rgba(255,255,255,0.05);
 }
 
 .vpn-split-section {
@@ -977,9 +1032,9 @@ html, body {
 .vpn-split-section input {
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid rgba(255,255,255,0.1);
   border-radius: var(--radius);
-  background: var(--bg);
+  background: rgba(255,255,255,0.03);
   color: var(--text);
   font-size: 0.78rem;
   outline: none;
@@ -988,7 +1043,8 @@ html, body {
 }
 
 .vpn-split-section input:focus {
-  border-color: var(--accent);
+  border-color: rgba(255,255,255,0.25);
+  background: rgba(255,255,255,0.05);
 }
 
 .vpn-warning {
@@ -1010,21 +1066,21 @@ html, body {
 }
 
 .btn-connect {
-  background: #e0e0e0;
-  color: #111;
+  background: rgba(255,255,255,0.08);
+  color: var(--text);
   padding: 6px 14px;
   font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  border: none;
+  border: 1px solid rgba(255,255,255,0.15);
   border-radius: var(--radius);
   cursor: pointer;
-  transition: all 0.15s;
 }
 
 .btn-connect:hover {
-  background: #fff;
+  background: rgba(255,255,255,0.12);
+  border-color: rgba(255,255,255,0.25);
 }
 
 .btn-text {
