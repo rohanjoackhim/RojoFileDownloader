@@ -650,11 +650,11 @@ $("btnSpeedTest").addEventListener("click", async () => {
   const originalText = btn.querySelector("span").textContent;
   btn.disabled = true;
   btn.querySelector("span").textContent = "Testing...";
-  
+
   try {
     const result = await rojoAPI.speedTest();
     if (result.ok) {
-      showToast(`Download Speed: ${result.downloadSpeedFormatted}`);
+      showToast(`Down: ${result.downloadSpeedFormatted} | Up: ${result.uploadSpeedFormatted} | Ping: ${result.ping}`);
     } else {
       showToast(`Speed test failed: ${result.error}`, "error");
     }

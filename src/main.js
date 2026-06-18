@@ -973,56 +973,28 @@ ipcMain.handle("vpn-load-config", async () => {
   }
 });
 
-// Internet speed test
+// Internet speed test using speedtest-net for accurate download and upload measurement
 ipcMain.handle("speed-test", async () => {
-  const https = require("https");
-  const http = require("http");
-  
   try {
-    // Test download speed by downloading a small file
-    const testUrl = "https://speed.cloudflare.com/__down?bytes=10000000"; // 10MB test file
-    const startTime = Date.now();
+    const { default: speedTest } = await import("speedtest-net");
+    const result = await speedTest({ acceptLicense: true, acceptGdpr: true });
     
-    return new Promise((resolve) => {
-      let downloadedBytes = 0;
-      
-      const protocol = testUrl.startsWith("https") ? https : http;
-      
-      const req = protocol.get(testUrl, (res) => {
-        if (res.statusCode !== 200) {
-          resolve({ ok: false, error: `HTTP ${res.statusCode}` });
-          return;
-        }
-        
-        res.on("data", (chunk) => {
-          downloadedBytes += chunk.length;
-        });
-        
-        res.on("end", () => {
-          const endTime = Date.now();
-          const durationSec = (endTime - startTime) / 1000;
-          const speedBps = downloadedBytes / durationSec;
-          const speedMbps = speedBps / 1000000;
-          
-          resolve({
-            ok: true,
-            downloadSpeed: speedMbps,
-            downloadSpeedFormatted: formatSpeed(speedBps),
-            duration: durationSec.toFixed(2)
-          });
-        });
-      });
-      
-      req.on("error", (err) => {
-        resolve({ ok: false, error: err.message });
-      });
-      
-      req.setTimeout(30000, () => {
-        req.destroy();
-        resolve({ ok: false, error: "Timeout" });
-      });
-    });
+    const downloadMbps = (result.download.bandwidth * 8) / 1000000;
+    const uploadMbps = (result.upload.bandwidth * 8) / 1000000;
+    
+    return {
+      ok: true,
+      downloadSpeed: downloadMbps.toFixed(2),
+      uploadSpeed: uploadMbps.toFixed(2),
+      downloadSpeedFormatted: downloadMbps.toFixed(2) + " Mbps",
+      uploadSpeedFormatted: uploadMbps.toFixed(2) + " Mbps",
+      ping: result.ping.latency + " ms",
+      jitter: result.ping.jitter + " ms",
+      server: result.server.name + " (" + result.server.location + ")",
+      duration: result.result.duration ? (result.result.duration / 1000).toFixed(2) : "N/A"
+    };
   } catch (e) {
+    console.error("[RO^JO] Speed test error:", e.message);
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 });
