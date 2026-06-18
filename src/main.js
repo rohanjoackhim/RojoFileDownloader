@@ -28,7 +28,7 @@ const ROJO_CONFIG = {
   dht: true,
   tracker: true,
   webSeeds: true,
-  maxConns: 200,
+  maxConns: 55,
   defaultDownloadPath: DEFAULT_DOWNLOAD_DIR,
   // Comprehensive tracker list for best peer discovery
   announce: [
@@ -110,10 +110,20 @@ async function restoreTorrents() {
     if (!Array.isArray(list) || list.length === 0) return;
     console.log(`[RO^JO] Restoring ${list.length} torrents from state file`);
 
-    for (const entry of list) {
+    for (let i = 0; i < list.length; i++) {
+      const entry = list[i];
       if (!entry.infoHash) continue;
+
+      // Skip if already in client (duplicate protection)
+      if (client.torrents.some(t => t.infoHash === entry.infoHash)) {
+        console.log(`[RO^JO] Skipping duplicate restore: ${entry.name}`);
+        activeTorrents.set(entry.infoHash, entry);
+        continue;
+      }
+
       // Re-add to activeTorrents map
       activeTorrents.set(entry.infoHash, entry);
+
       // Try to re-add to WebTorrent client
       if (entry.magnetUri) {
         try {
@@ -136,6 +146,11 @@ async function restoreTorrents() {
         } catch (e) {
           console.error(`[RO^JO] Failed to re-add .torrent ${entry.name}:`, e.message);
         }
+      }
+
+      // Stagger restores to avoid overwhelming the client (500ms between each)
+      if (i < list.length - 1) {
+        await new Promise(r => setTimeout(r, 500));
       }
     }
   } catch (e) {
