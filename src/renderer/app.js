@@ -741,10 +741,11 @@ $("btnSetDefault").addEventListener("click", async () => {
   try {
     await rojoAPI.setAsDefault();
     const check = await rojoAPI.checkIsDefault();
-    updateDefaultStar(check.isDefault);
-    // Only show feedback when something actually failed
-    if (!check.isDefault) {
-      showToast("Could not set as default. macOS may require the app to be in /Applications.", "error");
+    // Check magnet specifically — on macOS this requires the app to be in /Applications
+    const isMagnetDefault = check.magnet;
+    updateDefaultStar(isMagnetDefault);
+    if (!isMagnetDefault) {
+      showToast("Set for .torrent files. For magnet links, move Rojo to /Applications.", "warning");
     }
   } catch (e) {
     showToast(e.message, "error");
@@ -1127,7 +1128,7 @@ $("btnVpnImport").addEventListener("click", async () => {
   console.log("[RO^JO] Download path:", dlPath);
   try {
     const def = await rojoAPI.checkIsDefault();
-    updateDefaultStar(def.isDefault);
+    updateDefaultStar(def.magnet);
   } catch (e) {
     console.warn("[RO^JO] checkIsDefault failed:", e);
   }

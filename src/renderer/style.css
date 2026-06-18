@@ -237,8 +237,8 @@ html, body {
 .btn-secondary:hover { background: var(--bg-hover); }
 
 #btnSetDefault svg {
-  fill: none;
-  stroke: var(--text-dim);
+  fill: #1a1a1a;
+  stroke: #555;
 }
 #btnSetDefault.is-default svg {
   fill: #22c55e;

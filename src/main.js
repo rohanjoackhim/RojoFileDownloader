@@ -1225,11 +1225,33 @@ const pendingFiles = [];
 const pendingUrls = [];
 
 // Handle magnet: protocol on macOS
-app.on("open-url", (event, url) => {
+app.on("open-url", async (event, url) => {
   event.preventDefault();
   if (url.startsWith("magnet:")) {
+    if (win) {
+      if (win.isMinimized()) win.restore();
+      win.focus();
+    }
     if (client) {
-      handleAddMagnet(url);
+      try {
+        const result = await handleAddMagnet(url);
+        if (result.duplicate && win && !win.isDestroyed()) {
+          const { response } = await dialog.showMessageBox(win, {
+            type: "question",
+            buttons: ["Cancel", "Replace"],
+            defaultId: 1,
+            title: "Duplicate Torrent",
+            message: `"${result.name}" is already in your download list.`,
+            detail: "Do you want to remove the old one and add it again?",
+          });
+          if (response === 1) {
+            await removeTorrent(result.infoHash, true);
+            await handleAddMagnet(url);
+          }
+        }
+      } catch (e) {
+        console.error("[RO^JO] Failed to handle magnet URL:", e.message);
+      }
     } else {
       pendingUrls.push(url);
     }
@@ -1278,7 +1300,25 @@ app.whenReady().then(async () => {
   pendingFiles.length = 0;
 
   for (const url of pendingUrls) {
-    handleAddMagnet(url);
+    try {
+      const result = await handleAddMagnet(url);
+      if (result.duplicate && win && !win.isDestroyed()) {
+        const { response } = await dialog.showMessageBox(win, {
+          type: "question",
+          buttons: ["Cancel", "Replace"],
+          defaultId: 1,
+          title: "Duplicate Torrent",
+          message: `"${result.name}" is already in your download list.`,
+          detail: "Do you want to remove the old one and add it again?",
+        });
+        if (response === 1) {
+          await removeTorrent(result.infoHash, true);
+          await handleAddMagnet(url);
+        }
+      }
+    } catch (e) {
+      console.error("[RO^JO] Failed to process pending magnet URL:", e.message);
+    }
   }
   pendingUrls.length = 0;
 
