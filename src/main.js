@@ -24,7 +24,7 @@ const ROJO_CONFIG = {
   dht: true,
   tracker: true,
   webSeeds: true,
-  maxConns: 1000,
+  maxConns: 200,
   defaultDownloadPath: DEFAULT_DOWNLOAD_DIR,
   // Comprehensive tracker list for best peer discovery
   announce: [
@@ -176,59 +176,47 @@ async function initWebTorrent() {
     broadcast("torrent-error", err.message);
   });
 
-  // Periodically broadcast stats to renderer
-  setInterval(() => {
-    if (!win || win.isDestroyed()) return;
-    const list = [];
-    for (const t of client.torrents) {
-      const entry = activeTorrents.get(t.infoHash);
-      if (!entry) continue;
-      entry.progress = t.progress;
-      entry.speed = t.downloadSpeed;
-      entry.uploadSpeed = t.uploadSpeed;
-      entry.peers = t.numPeers;
-      entry.downloaded = t.downloaded;
-      entry.uploaded = t.uploaded || 0;
-      entry.length = t.length;
-      entry.timeRemaining = t.timeRemaining || 0;
-      entry.ratio = t.downloaded > 0 ? (t.uploaded || 0) / t.downloaded : 0;
-      if (t.done) entry.status = "completed";
+  // Periodically broadcast stats to renderer (non-blocking loop)
+  let statsRunning = false;
+  async function statsLoop() {
+    if (statsRunning) return;
+    statsRunning = true;
+    while (client && win && !win.isDestroyed()) {
+      const list = [];
+      for (const t of client.torrents) {
+        const entry = activeTorrents.get(t.infoHash);
+        if (!entry) continue;
+        entry.progress = t.progress;
+        entry.speed = t.downloadSpeed;
+        entry.uploadSpeed = t.uploadSpeed;
+        entry.peers = t.numPeers;
+        entry.downloaded = t.downloaded;
+        entry.uploaded = t.uploaded || 0;
+        entry.length = t.length;
+        entry.timeRemaining = t.timeRemaining || 0;
+        entry.ratio = t.downloaded > 0 ? (t.uploaded || 0) / t.downloaded : 0;
+        if (t.done) entry.status = "completed";
+        list.push({ ...entry });
+      }
+      broadcast("torrents-updated", {
+        torrents: list,
+        downloadSpeed: client.downloadSpeed,
+        uploadSpeed: client.uploadSpeed,
+      });
+      updateDockBadge();
 
-      // Debug: verify files actually exist on disk
-      if (entry.path && t.downloaded > 0) {
-        try {
-          const stat = fs.statSync(entry.path);
-          if (stat.size === 0 && t.downloaded > 1024 * 1024) {
-            console.warn(`[RO^JO] WARNING: ${entry.name} shows ${(t.downloaded / 1024 / 1024 / 1024).toFixed(2)}GB downloaded but file is 0 bytes at ${entry.path}`);
-          }
-        } catch (e) {
-          // File or folder doesn't exist yet — may be a multi-file torrent
-          // Try checking the parent folder
-          try {
-            const parentDir = path.dirname(entry.path);
-            if (fs.existsSync(parentDir)) {
-              const items = fs.readdirSync(parentDir);
-              console.log(`[RO^JO] ${entry.name} parent dir exists: ${parentDir}, contents:`, items.slice(0, 5));
-            } else {
-              console.warn(`[RO^JO] WARNING: ${entry.name} parent dir does not exist: ${parentDir}`);
-            }
-          } catch (e2) {
-            console.warn(`[RO^JO] WARNING: ${entry.name} cannot check disk path: ${e2.message}`);
-          }
-        }
+      // Log memory usage every ~10 seconds (when loop counter hits 10)
+      statsLoop.counter = (statsLoop.counter || 0) + 1;
+      if (statsLoop.counter % 10 === 0) {
+        const mem = process.memoryUsage();
+        console.log(`[RO^JO] Memory: rss=${(mem.rss/1048576).toFixed(1)}MB heap=${(mem.heapUsed/1048576).toFixed(1)}MB torrents=${client.torrents.length} conns=${client.maxConns}`);
       }
 
-      list.push({ ...entry });
+      await new Promise(r => setTimeout(r, 1000));
     }
-    broadcast("torrents-updated", {
-      torrents: list,
-      downloadSpeed: client.downloadSpeed,
-      uploadSpeed: client.uploadSpeed,
-    });
-
-    // Update dock badge / taskbar progress when minimized
-    updateDockBadge();
-  }, 1000);
+    statsRunning = false;
+  }
+  statsLoop();
 }
 
 async function handleAddMagnet(magnetUri) {
@@ -241,17 +229,12 @@ async function handleAddMagnet(magnetUri) {
     return new Promise((resolve) => {
       let responded = false;
       let torrent;
-      console.log(`[RO^JO] Adding magnet, downloadPath=${downloadPath}`);
       try {
         torrent = client.add(magnetUri, {
           path: downloadPath,
           announce: ROJO_CONFIG.announce,
         }, (t) => {
           const actualPath = path.join(downloadPath, t.name);
-          console.log(`[RO^JO] Torrent ready: name="${t.name}", infoHash=${t.infoHash}, actualPath=${actualPath}, files=${t.files.length}`);
-          for (const f of t.files) {
-            console.log(`[RO^JO]   file: ${f.name}, length=${f.length}, path=${f.path}`);
-          }
           activeTorrents.set(t.infoHash, {
             name: t.name,
             infoHash: t.infoHash,
@@ -303,17 +286,12 @@ async function handleAddTorrentFile(buffer) {
     return new Promise((resolve) => {
       let responded = false;
       let torrent;
-      console.log(`[RO^JO] Adding torrent file, downloadPath=${downloadPath}`);
       try {
         torrent = client.add(buffer, {
           path: downloadPath,
           announce: ROJO_CONFIG.announce,
         }, (t) => {
           const actualPath = path.join(downloadPath, t.name);
-          console.log(`[RO^JO] Torrent ready: name="${t.name}", infoHash=${t.infoHash}, actualPath=${actualPath}, files=${t.files.length}`);
-          for (const f of t.files) {
-            console.log(`[RO^JO]   file: ${f.name}, length=${f.length}, path=${f.path}`);
-          }
           activeTorrents.set(t.infoHash, {
             name: t.name,
             infoHash: t.infoHash,

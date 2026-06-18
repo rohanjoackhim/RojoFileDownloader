@@ -383,6 +383,7 @@ $("magnetModal").querySelector(".modal-backdrop").addEventListener("click", clos
 
 // ---------- IPC Listeners ----------
 
+let renderPending = false;
 rojoAPI.onTorrentsUpdated((data) => {
   torrents = data.torrents || [];
   const count = torrents.length;
@@ -390,7 +391,13 @@ rojoAPI.onTorrentsUpdated((data) => {
   $("statusText").textContent = label;
   $("downSpeed").textContent = formatSpeed(data.downloadSpeed);
   $("upSpeed").textContent = formatSpeed(data.uploadSpeed);
-  renderTorrents();
+  if (!renderPending) {
+    renderPending = true;
+    requestAnimationFrame(() => {
+      renderPending = false;
+      renderTorrents();
+    });
+  }
 });
 
 rojoAPI.onTorrentCompleted((data) => {
