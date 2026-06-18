@@ -445,10 +445,26 @@ async function resumeTorrent(infoHash) {
   }
 }
 
+function removeTorrentFromUI(infoHash) {
+  const item = torrentElements.get(infoHash);
+  if (item && item.el.parentNode) {
+    item.el.parentNode.removeChild(item.el);
+  }
+  torrentElements.delete(infoHash);
+  torrents = torrents.filter((t) => t.infoHash !== infoHash);
+  if (selectedHash === infoHash) {
+    selectedHash = null;
+    $("detailPanel").style.display = "none";
+  }
+}
+
 async function removeTorrent(infoHash) {
   const t = torrents.find((x) => x.infoHash === infoHash);
   if (!t) return;
   if (!confirm(`Remove "${t.name}" from the list?\n\nDownloaded files will remain on disk.`)) return;
+
+  // Immediately vanish from UI so it feels instant
+  removeTorrentFromUI(infoHash);
 
   try {
     await rojoAPI.removeTorrent(infoHash, false);
@@ -462,6 +478,9 @@ async function deleteWithFiles(infoHash) {
   const t = torrents.find((x) => x.infoHash === infoHash);
   if (!t) return;
   if (!confirm(`Delete "${t.name}" and all downloaded files?\n\nThis cannot be undone.`)) return;
+
+  // Immediately vanish from UI so it feels instant
+  removeTorrentFromUI(infoHash);
 
   try {
     await rojoAPI.removeTorrent(infoHash, true);
@@ -848,6 +867,10 @@ rojoAPI.onTorrentError((msg) => {
 
 rojoAPI.onTorrentAutoPaused((data) => {
   showToast(`Stopped seeding ${data.name} at ratio ${data.ratio.toFixed(2)}`);
+});
+
+rojoAPI.onTorrentRemoved((data) => {
+  removeTorrentFromUI(data.infoHash);
 });
 
 // ---------- VPN ----------

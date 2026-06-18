@@ -47,4 +47,7 @@ contextBridge.exposeInMainWorld("rojoAPI", {
   onTorrentAutoPaused: (callback) => {
     ipcRenderer.on("torrent-auto-paused", (_event, data) => callback(data));
   },
+  onTorrentRemoved: (callback) => {
+    ipcRenderer.on("torrent-removed", (_event, data) => callback(data));
+  },
 });

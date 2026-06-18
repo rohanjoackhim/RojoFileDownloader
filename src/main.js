@@ -373,6 +373,10 @@ async function removeTorrent(infoHash, deleteFiles = false) {
     client.remove(torrent, { destroyStore: deleteFiles }, (err) => {
       if (err) return resolve({ ok: false, error: err.message });
       activeTorrents.delete(infoHash);
+      // Immediately tell the renderer so the item vanishes from the list
+      if (win && !win.isDestroyed()) {
+        broadcast("torrent-removed", { infoHash });
+      }
       resolve({ ok: true });
     });
   });
