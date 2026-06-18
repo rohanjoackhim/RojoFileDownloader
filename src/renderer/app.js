@@ -314,7 +314,6 @@ function renderTorrents() {
 
 // Fast incremental update: only update changed properties, never rebuild DOM
 function updateTorrentElements() {
-  console.log(`[Renderer] updateTorrentElements: torrents.length=${torrents.length}, torrentElements.size=${torrentElements.size}`);
   const listEl = $("torrentList");
   const emptyEl = $("emptyState");
   const dropEl = $("dropZone");
@@ -335,7 +334,6 @@ function updateTorrentElements() {
   emptyEl.style.display = "none";
   dropEl.style.display = "none";
 
-  // Build display order (skip heavy sort if no custom order)
   const displayTorrents = torrentOrder.length > 0
     ? [...torrents].sort((a, b) => {
         const oa = torrentOrder.indexOf(a.infoHash);
@@ -346,7 +344,6 @@ function updateTorrentElements() {
 
   const currentHashes = new Set(displayTorrents.map(t => t.infoHash));
 
-  // Remove dead elements (only check every ~5 seconds to avoid thrashing)
   const now = Date.now();
   if (now - lastDeadCheck > 5000) {
     lastDeadCheck = now;
@@ -358,7 +355,6 @@ function updateTorrentElements() {
     }
   }
 
-  // Check if any new elements need creation (triggers full rebuild)
   let needsAppend = false;
   for (const t of displayTorrents) {
     if (!torrentElements.has(t.infoHash)) {
@@ -367,15 +363,11 @@ function updateTorrentElements() {
     }
   }
 
-  console.log(`[Renderer] needsAppend=${needsAppend}, displayTorrents.length=${displayTorrents.length}`);
-
   if (needsAppend) {
-    // Full rebuild: collect all elements into fragment and replace list contents
     const fragment = document.createDocumentFragment();
     for (const t of displayTorrents) {
       let item = torrentElements.get(t.infoHash);
       if (!item) {
-        console.log(`[Renderer] Creating new element for torrent: ${t.name}`);
         item = createTorrentElement(t);
         torrentElements.set(t.infoHash, item);
       }
@@ -385,16 +377,12 @@ function updateTorrentElements() {
     }
     listEl.innerHTML = "";
     listEl.appendChild(fragment);
-    console.log(`[Renderer] Full rebuild complete, listEl.children.length=${listEl.children.length}`);
   } else {
-    // Fast path: only update text/property changes, zero DOM structure changes
     for (const t of displayTorrents) {
       const item = torrentElements.get(t.infoHash);
       updateTorrentElement(item.refs, t);
-      // Selection is handled by selectTorrent() to avoid O(n) classList toggles every frame
     }
   }
-
 }
 
 function selectTorrent(infoHash) {
@@ -943,7 +931,6 @@ let lastLogTime = 0;
 let contextMenuOpen = false;
 let lastDeadCheck = 0;
 rojoAPI.onTorrentsUpdated((data) => {
-  console.log(`[Renderer] torrents-updated received: ${data.torrents?.length || 0} torrents`);
   torrents = data.torrents || [];
   const count = torrents.length;
   const label = count === 1 ? "1 transfer" : count + " transfers";
@@ -954,29 +941,13 @@ rojoAPI.onTorrentsUpdated((data) => {
     renderPending = true;
     requestAnimationFrame(() => {
       renderPending = false;
-      // Skip all DOM updates while context menu is open to prevent freezing
       if (!contextMenuOpen) {
         $("statusText").textContent = label;
         $("downSpeed").textContent = down;
         $("upSpeed").textContent = up;
-        console.log(`[Renderer] Calling updateTorrentElements with ${torrents.length} torrents`);
         updateTorrentElements();
       }
     });
-  }
-  // Log speed updates: at most once every 5 seconds, and only when activity changes
-  const now = Date.now();
-  if (now - lastLogTime > 5000) {
-    lastLogTime = now;
-    const timeStr = new Date(now).toLocaleTimeString();
-    for (const t of torrents) {
-      if (t.speed > 0 || t.uploadSpeed > 0) {
-        if (!torrentLogs.has(t.infoHash)) torrentLogs.set(t.infoHash, []);
-        const log = torrentLogs.get(t.infoHash);
-        log.push(`[${timeStr}] ${t.status} | ${formatSpeed(t.speed)} down | ${formatSpeed(t.uploadSpeed)} up | ${Math.round(t.progress*100)}% | ${t.peers} peers`);
-        if (log.length > 100) log.shift();
-      }
-    }
   }
 });
 

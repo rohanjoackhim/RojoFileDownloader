@@ -23,12 +23,13 @@ if (!fs.existsSync(DEFAULT_DOWNLOAD_DIR)) {
   fs.mkdirSync(DEFAULT_DOWNLOAD_DIR, { recursive: true });
 }
 
-// Pre-configured optimal settings
+// Pre-configured optimal settings (DHT/uTP disabled to avoid native crashes)
 const ROJO_CONFIG = {
-  dht: true,
+  dht: false,
   tracker: true,
-  webSeeds: true,
-  maxConns: 55,
+  webSeeds: false,
+  maxConns: 30,
+  utp: false,
   defaultDownloadPath: DEFAULT_DOWNLOAD_DIR,
   // Comprehensive tracker list for best peer discovery
   announce: [
@@ -265,6 +266,7 @@ async function initWebTorrent() {
     tracker: ROJO_CONFIG.tracker,
     webSeeds: ROJO_CONFIG.webSeeds,
     maxConns: ROJO_CONFIG.maxConns,
+    utp: ROJO_CONFIG.utp,
   });
 
   client.on("error", (err) => {
@@ -279,88 +281,85 @@ async function initWebTorrent() {
     if (statsRunning) return;
     statsRunning = true;
     while (client && !isQuitting) {
-      const list = [];
-      for (const t of client.torrents) {
-        let entry = activeTorrents.get(t.infoHash);
-        // Fallback: if torrent is in client but not in activeTorrents, create entry on the fly
-        if (!entry) {
-          console.log(`[RO^JO] Stats loop: torrent ${t.infoHash} not in activeTorrents, creating entry`);
-          entry = {
-            name: t.name,
-            infoHash: t.infoHash,
-            progress: t.progress || 0,
-            speed: t.downloadSpeed || 0,
-            uploadSpeed: t.uploadSpeed || 0,
-            peers: t.numPeers || 0,
-            status: t.done ? "completed" : "downloading",
-            path: t.path || "",
-            addedAt: Date.now(),
-            downloaded: t.downloaded || 0,
-            uploaded: t.uploaded || 0,
-            length: t.length || 0,
-            timeRemaining: t.timeRemaining || 0,
-            ratio: t.downloaded > 0 ? (t.uploaded || 0) / t.downloaded : 0,
-          };
-          activeTorrents.set(t.infoHash, entry);
+      try {
+        const list = [];
+        for (const t of client.torrents) {
+          let entry = activeTorrents.get(t.infoHash);
+          if (!entry) {
+            entry = {
+              name: t.name,
+              infoHash: t.infoHash,
+              progress: t.progress || 0,
+              speed: t.downloadSpeed || 0,
+              uploadSpeed: t.uploadSpeed || 0,
+              peers: t.numPeers || 0,
+              status: t.done ? "completed" : "downloading",
+              path: t.path || "",
+              addedAt: Date.now(),
+              downloaded: t.downloaded || 0,
+              uploaded: t.uploaded || 0,
+              length: t.length || 0,
+              timeRemaining: t.timeRemaining || 0,
+              ratio: t.downloaded > 0 ? (t.uploaded || 0) / t.downloaded : 0,
+            };
+            activeTorrents.set(t.infoHash, entry);
+          }
+          const isPaused = entry.status === "paused";
+          if (isPaused && entry._frozenDownloaded !== undefined) {
+            entry.progress = entry._frozenProgress;
+            entry.speed = 0;
+            entry.uploadSpeed = 0;
+            entry.downloaded = entry._frozenDownloaded;
+            entry.uploaded = entry._frozenUploaded;
+            entry.ratio = entry._frozenDownloaded > 0 ? entry._frozenUploaded / entry._frozenDownloaded : 0;
+          } else {
+            entry.progress = t.progress;
+            entry.speed = t.downloadSpeed;
+            entry.uploadSpeed = t.uploadSpeed;
+            entry.downloaded = t.downloaded;
+            entry.uploaded = t.uploaded || 0;
+            entry.ratio = t.downloaded > 0 ? (t.uploaded || 0) / t.downloaded : 0;
+          }
+          entry.peers = t.numPeers;
+          entry.length = t.length;
+          entry.timeRemaining = t.timeRemaining || 0;
+          if (t.done) entry.status = "completed";
+          list.push({
+            name: entry.name,
+            infoHash: entry.infoHash,
+            progress: entry.progress,
+            speed: entry.speed,
+            uploadSpeed: entry.uploadSpeed,
+            peers: entry.peers,
+            status: entry.status,
+            path: entry.path,
+            addedAt: entry.addedAt,
+            downloaded: entry.downloaded,
+            uploaded: entry.uploaded,
+            length: entry.length,
+            timeRemaining: entry.timeRemaining,
+            ratio: entry.ratio,
+          });
         }
-        const isPaused = entry.status === "paused";
-        if (isPaused && entry._frozenDownloaded !== undefined) {
-          // Use frozen values so in-flight pieces don't inflate the UI
-          entry.progress = entry._frozenProgress;
-          entry.speed = 0;
-          entry.uploadSpeed = 0;
-          entry.downloaded = entry._frozenDownloaded;
-          entry.uploaded = entry._frozenUploaded;
-          entry.ratio = entry._frozenDownloaded > 0 ? entry._frozenUploaded / entry._frozenDownloaded : 0;
-        } else {
-          entry.progress = t.progress;
-          entry.speed = t.downloadSpeed;
-          entry.uploadSpeed = t.uploadSpeed;
-          entry.downloaded = t.downloaded;
-          entry.uploaded = t.uploaded || 0;
-          entry.ratio = t.downloaded > 0 ? (t.uploaded || 0) / t.downloaded : 0;
+        if (win && !win.isDestroyed()) {
+          broadcast("torrents-updated", {
+            torrents: list,
+            downloadSpeed: client.downloadSpeed,
+            uploadSpeed: client.uploadSpeed,
+          });
+          updateDockBadge();
         }
-        entry.peers = t.numPeers;
-        entry.length = t.length;
-        entry.timeRemaining = t.timeRemaining || 0;
-        if (t.done) entry.status = "completed";
-        // Avoid spread to reduce GC pressure: push known fields explicitly
-        list.push({
-          name: entry.name,
-          infoHash: entry.infoHash,
-          progress: entry.progress,
-          speed: entry.speed,
-          uploadSpeed: entry.uploadSpeed,
-          peers: entry.peers,
-          status: entry.status,
-          path: entry.path,
-          addedAt: entry.addedAt,
-          downloaded: entry.downloaded,
-          uploaded: entry.uploaded,
-          length: entry.length,
-          timeRemaining: entry.timeRemaining,
-          ratio: entry.ratio,
-        });
-      }
-      console.log(`[RO^JO] Stats loop: broadcasting ${list.length} torrents to renderer`);
-      // Only broadcast if window exists and isn't destroyed
-      if (win && !win.isDestroyed()) {
-        broadcast("torrents-updated", {
-          torrents: list,
-          downloadSpeed: client.downloadSpeed,
-          uploadSpeed: client.uploadSpeed,
-        });
-        updateDockBadge();
-      }
-      await checkStopRatios();
+        await checkStopRatios();
 
-      // Log memory usage every ~10 seconds (when loop counter hits 10)
-      statsLoop.counter = (statsLoop.counter || 0) + 1;
-      if (statsLoop.counter % 10 === 0) {
-        const mem = process.memoryUsage();
-        console.log(`[RO^JO] Memory: rss=${(mem.rss/1048576).toFixed(1)}MB heap=${(mem.heapUsed/1048576).toFixed(1)}MB torrents=${client.torrents.length} conns=${client.maxConns}`);
+        // Log memory every 60s (every 60 iterations)
+        statsLoop.counter = (statsLoop.counter || 0) + 1;
+        if (statsLoop.counter % 60 === 0) {
+          const mem = process.memoryUsage();
+          console.log(`[RO^JO] mem rss=${(mem.rss/1048576).toFixed(1)}MB heap=${(mem.heapUsed/1048576).toFixed(1)}MB torrents=${client.torrents.length}`);
+        }
+      } catch (err) {
+        console.error("[RO^JO] statsLoop error:", err.message);
       }
-
       await new Promise(r => setTimeout(r, 1000));
     }
     statsRunning = false;
@@ -384,12 +383,12 @@ async function handleAddMagnet(magnetUri) {
       if (displayName) displayName = decodeURIComponent(displayName).replace(/\+/g, " ");
     } catch (e) { /* ignore malformed URIs */ }
 
-    console.log(`[RO^JO] handleAddMagnet: path=${downloadPath}, displayName=${displayName || "N/A"}`);
+    // debug: console.log(`[RO^JO] handleAddMagnet: path=${downloadPath}, displayName=${displayName || "N/A"}`);
 
     // Check if torrent already exists in activeTorrents (duplicate check)
     for (const [infoHash, entry] of activeTorrents) {
       if (magnetUri.includes(infoHash)) {
-        console.log(`[RO^JO] Duplicate torrent found in activeTorrents: ${infoHash}`);
+        // debug: duplicate detected
         return {
           ok: false,
           duplicate: true,
@@ -403,10 +402,10 @@ async function handleAddMagnet(magnetUri) {
     // Check if torrent already exists in client (from previous failed add)
     const existingTorrent = client.torrents.find(t => magnetUri.includes(t.infoHash));
     if (existingTorrent) {
-      console.log(`[RO^JO] Torrent already exists in client: ${existingTorrent.infoHash}`);
+      // debug: already in client
       // If it's in client but not in activeTorrents, re-add it to the map
       if (!activeTorrents.has(existingTorrent.infoHash)) {
-        console.log(`[RO^JO] Re-adding existing torrent to activeTorrents`);
+        // debug: re-adding to activeTorrents
         const actualPath = path.join(downloadPath, existingTorrent.name);
         activeTorrents.set(existingTorrent.infoHash, {
           name: displayName || existingTorrent.name,
@@ -422,7 +421,7 @@ async function handleAddMagnet(magnetUri) {
         });
         return { ok: true, infoHash: existingTorrent.infoHash, name: displayName || existingTorrent.name };
       } else {
-        console.log(`[RO^JO] Torrent already in activeTorrents, asking user to replace`);
+        // debug: already in activeTorrents
         const entry = activeTorrents.get(existingTorrent.infoHash);
         return {
           ok: false,
@@ -442,7 +441,7 @@ async function handleAddMagnet(magnetUri) {
           path: downloadPath,
           announce: ROJO_CONFIG.announce,
         }, (t) => {
-          console.log(`[RO^JO] Metadata received for torrent: ${t.name}, infoHash=${t.infoHash}, files=${t.files.length}`);
+          // debug: metadata received
           // Deselect all files initially, then show file picker
           t.files.forEach(f => f.deselect());
 
@@ -463,7 +462,7 @@ async function handleAddMagnet(magnetUri) {
               length: t.length || 0,
               magnetUri: magnetUri,
             });
-            console.log(`[RO^JO] Added single-file torrent to activeTorrents: ${t.infoHash}`);
+            // debug: single-file torrent added
             if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: displayName || t.name }); }
             return;
           }
@@ -482,7 +481,7 @@ async function handleAddMagnet(magnetUri) {
             magnetUri,
             fileList,
           });
-          console.log(`[RO^JO] Showing file picker for ${t.name} with ${fileList.length} files`);
+          // debug: showing file picker
           broadcast("show-file-picker", {
             infoHash: t.infoHash,
             name: displayName || t.name,
@@ -490,15 +489,15 @@ async function handleAddMagnet(magnetUri) {
           });
           if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: displayName || t.name, filePicker: true }); }
         });
-        console.log(`[RO^JO] Torrent added to client, waiting for metadata...`);
+        // debug: waiting for metadata
       } catch (err) {
-        console.error(`[RO^JO] Error adding torrent to client:`, err);
+        console.error(`[RO^JO] Error adding torrent to client:`, err.message);
         if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
         return;
       }
 
       torrent.on("error", (err) => {
-        console.error(`[RO^JO] Torrent error:`, err);
+        console.error(`[RO^JO] Torrent error:`, err.message);
         if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
       });
 
@@ -510,26 +509,26 @@ async function handleAddMagnet(magnetUri) {
 
       setTimeout(() => {
         if (!responded) {
-          console.error(`[RO^JO] Timeout waiting for metadata after 25s`);
+          // debug: metadata timeout
           responded = true;
           resolve({ ok: false, error: "Timed out waiting for torrent metadata. Your ISP may block DHT/trackers." });
         }
       }, 25000);
     });
   } catch (err) {
-    console.error(`[RO^JO] handleAddMagnet error:`, err);
+    console.error(`[RO^JO] handleAddMagnet error:`, err.message);
     return { ok: false, error: err.message };
   }
 }
 
 async function handleAddTorrentFile(buffer) {
   if (!client) return { ok: false, error: "Engine not ready" };
-  console.log(`[RO^JO] handleAddTorrentFile: buffer=${buffer.byteLength} bytes`);
+  // debug: handleAddTorrentFile
 
   try {
     const downloadPath = await selectDownloadPath();
     if (!downloadPath) return { ok: false, error: "Download path not selected" };
-    console.log(`[RO^JO] handleAddTorrentFile: downloadPath=${downloadPath}`);
+    // debug: downloadPath selected
 
     return new Promise((resolve) => {
       let responded = false;
@@ -540,7 +539,7 @@ async function handleAddTorrentFile(buffer) {
           announce: ROJO_CONFIG.announce,
         }, (t) => {
           const actualPath = path.join(downloadPath, t.name);
-          console.log(`[RO^JO] Torrent ready: name="${t.name}", infoHash=${t.infoHash}, files=${t.files.length}`);
+          // debug: torrent ready
           // Deselect all files initially
           t.files.forEach(f => f.deselect());
 
