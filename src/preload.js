@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("rojoAPI", {
   selectFile: () => ipcRenderer.invoke("select-file"),
   getDownloadPath: () => ipcRenderer.invoke("get-download-path"),
   setAsDefault: () => ipcRenderer.invoke("set-as-default"),
+  checkIsDefault: () => ipcRenderer.invoke("check-is-default"),
 
   // Context menu actions
   getMagnetUri: (infoHash) => ipcRenderer.invoke("get-magnet-uri", infoHash),

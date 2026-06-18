@@ -171,6 +171,15 @@ html, body {
 
 .btn-secondary:hover { background: #2f333d; }
 
+#btnSetDefault svg {
+  fill: none;
+  stroke: currentColor;
+}
+#btnSetDefault.is-default svg {
+  fill: #facc15;
+  stroke: #facc15;
+}
+
 .btn-danger {
   background: var(--error-bg);
   color: var(--error);

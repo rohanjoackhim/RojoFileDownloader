@@ -567,6 +567,11 @@ $("magnetInput").addEventListener("keydown", (e) => {
 });
 $("btnOpenFile").addEventListener("click", openFile);
 $("btnOpenFolder").addEventListener("click", openFolder);
+
+function updateDefaultStar(isDefault) {
+  $("btnSetDefault").classList.toggle("is-default", isDefault);
+}
+
 $("btnSetDefault").addEventListener("click", async () => {
   try {
     const res = await rojoAPI.setAsDefault();
@@ -582,6 +587,9 @@ $("btnSetDefault").addEventListener("click", async () => {
     } else if (res.torrent === false) {
       showToast("Failed to set default for .torrent files", "error");
     }
+    // Update star color after setting
+    const check = await rojoAPI.checkIsDefault();
+    updateDefaultStar(check.isDefault);
   } catch (e) {
     showToast(e.message, "error");
   }
@@ -927,6 +935,12 @@ $("vpnModal").querySelector(".modal-backdrop").addEventListener("click", closeVp
 (async function init() {
   const dlPath = await rojoAPI.getDownloadPath();
   console.log("[RO^JO] Download path:", dlPath);
+  try {
+    const def = await rojoAPI.checkIsDefault();
+    updateDefaultStar(def.isDefault);
+  } catch (e) {
+    console.warn("[RO^JO] checkIsDefault failed:", e);
+  }
   updateTorrentElements();
   refreshVpnStatus();
 })();

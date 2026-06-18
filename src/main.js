@@ -539,6 +539,52 @@ print("done")
   return results;
 });
 
+ipcMain.handle("check-is-default", () => {
+  const results = { magnet: app.isDefaultProtocolClient("magnet") };
+
+  if (process.platform === "win32") {
+    try {
+      const { execSync } = require("child_process");
+      const reg = execSync('reg query "HKEY_CURRENT_USER\\Software\\Classes\\.torrent" /ve', { encoding: "utf8" });
+      results.torrent = reg.includes("RojoTorrent");
+    } catch (e) {
+      results.torrent = false;
+    }
+  } else if (process.platform === "darwin") {
+    try {
+      const { execSync } = require("child_process");
+      const appPath = process.execPath.replace(/\/Contents\/MacOS\/.*$/, "");
+      const checkScript = `
+import os
+plist_path = os.path.expanduser("~/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist")
+found = False
+if os.path.exists(plist_path):
+    try:
+        import plistlib
+        with open(plist_path, "rb") as f:
+            plist = plistlib.load(f)
+        for h in plist.get("LSHandlers", []):
+            if h.get("LSHandlerContentTag") == "torrent":
+                role = h.get("LSHandlerRoleAll", "")
+                found = "rojo" in role.lower() or "com.rojo" in role.lower()
+                break
+    except Exception:
+        pass
+print("true" if found else "false")
+`;
+      const out = execSync("python3 -c '" + checkScript.replace(/'/g, "'\\''") + "'", { encoding: "utf8" }).trim();
+      results.torrent = out === "true";
+    } catch (e) {
+      results.torrent = false;
+    }
+  } else {
+    results.torrent = results.magnet;
+  }
+
+  results.isDefault = results.magnet || results.torrent;
+  return results;
+});
+
 // ---------- Context Menu IPC ----------
 
 ipcMain.handle("get-magnet-uri", async (_evt, infoHash) => {
