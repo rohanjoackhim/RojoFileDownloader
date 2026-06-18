@@ -268,8 +268,8 @@ html, body {
 }
 
 .torrent-item {
-  background: #d0d0e0;
-  border: 1px solid #b8b8cc;
+  background: var(--bg-card);
+  border: 1px solid #d0d0e0;
   border-radius: var(--radius);
   padding: 4px 8px;
   display: flex;
@@ -280,7 +280,7 @@ html, body {
 }
 
 .torrent-item:hover {
-  background: #c0c0d4;
+  background: var(--bg-hover);
 }
 
 .torrent-item.selected {
@@ -292,7 +292,7 @@ html, body {
   width: 20px;
   height: 20px;
   border-radius: 4px;
-  background: #b8b8cc;
+  background: var(--bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -324,7 +324,6 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
   margin-bottom: 0;
-  color: #1a1a2e;
 }
 
 .torrent-meta {
@@ -332,7 +331,7 @@ html, body {
   align-items: center;
   gap: 5px;
   font-size: 0.62rem;
-  color: #555577;
+  color: var(--text-muted);
 }
 
 .status-badge {
