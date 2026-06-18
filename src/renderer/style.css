@@ -173,7 +173,7 @@ html, body {
 
 #btnSetDefault svg {
   fill: none;
-  stroke: currentColor;
+  stroke: #555;
 }
 #btnSetDefault.is-default svg {
   fill: #facc15;
