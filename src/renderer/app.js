@@ -384,12 +384,6 @@ function updateTorrentElements() {
     }
   }
 
-  // Update detail panel
-  if (selectedHash) {
-    const t = torrents.find((x) => x.infoHash === selectedHash);
-    if (t) updateDetailPanel(t);
-    else { selectedHash = null; $("detailPanel").style.display = "none"; }
-  }
 }
 
 function selectTorrent(infoHash) {
@@ -402,8 +396,7 @@ function selectTorrent(infoHash) {
   // Add selected class to new selection
   const curr = torrentElements.get(infoHash);
   if (curr) curr.el.classList.add("selected");
-  const t = torrents.find((x) => x.infoHash === infoHash);
-  updateDetailPanel(t);
+  // Detail panel removed from click — too much space. Use context menu > Show Torrent Info instead.
 }
 
 // ---------- Actions ----------
