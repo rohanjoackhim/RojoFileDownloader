@@ -118,7 +118,6 @@ function createTorrentElement(t) {
 
   const icon = document.createElement("div");
   icon.className = "torrent-icon";
-  icon.innerHTML = TORRENT_SVG;
   const iconText = document.createElement("span");
   iconText.className = "torrent-icon-text";
   icon.appendChild(iconText);
@@ -137,9 +136,6 @@ function createTorrentElement(t) {
   const badge = document.createElement("span");
   badge.className = "status-badge";
   meta.appendChild(badge);
-
-  const pctEl = document.createElement("span");
-  meta.appendChild(pctEl);
 
   const sizeEl = document.createElement("span");
   meta.appendChild(sizeEl);
@@ -170,7 +166,7 @@ function createTorrentElement(t) {
 
   return {
     el,
-    refs: { nameEl, badge, pctEl, sizeEl, peersEl, speedEl, etaEl, fill, actions, iconText },
+    refs: { nameEl, badge, sizeEl, peersEl, speedEl, etaEl, fill, actions, iconText },
   };
 }
 
@@ -192,7 +188,6 @@ function updateTorrentElement(refs, t) {
     refs.badge.className = "status-badge " + statusClass;
     refs.badge.textContent = t.status;
   }
-  if (last.pct !== pct) refs.pctEl.textContent = pct + "%";
   if (last.size !== sizeText) refs.sizeEl.textContent = sizeText;
   if (last.peers !== peersText) refs.peersEl.textContent = peersText;
   if (last.speed !== speedText) refs.speedEl.textContent = speedText;
