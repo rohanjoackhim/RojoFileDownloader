@@ -60,33 +60,51 @@ function escapeHtml(str) {
 
 // ---------- Detail Panel ----------
 
+// Cache last detail values to avoid redundant DOM updates
+let lastDetailHash = null;
+let lastDetail = {};
+
 function updateDetailPanel(t) {
   if (!t) {
     $("detailPanel").style.display = "none";
+    lastDetailHash = null;
     return;
   }
   $("detailPanel").style.display = "block";
-  $("detailName").textContent = t.name || "--";
 
+  const hash = t.infoHash;
   const pct = Math.round((t.progress || 0) * 100);
-  $("detailSize").textContent = `${formatBytes(t.downloaded || 0)} of ${formatBytes(t.length || 0)} (${(t.progress || 0).toFixed(2)}%)`;
-  $("detailPct").textContent = pct + "%";
+  const sizeText = `${formatBytes(t.downloaded || 0)} of ${formatBytes(t.length || 0)} (${(t.progress || 0).toFixed(2)}%)`;
+  const fillClass = "battery-fill" + (t.status === "completed" ? " completed" : t.status === "paused" ? " paused" : "");
+  const statusText = t.status === "completed" ? "Download complete" :
+                     t.status === "paused" ? "Paused" :
+                     t.speed > 0 ? `Downloading ${formatSpeed(t.speed)}` : "Connecting to peers…";
+  const peersText = (t.peers || 0) + " peers";
+  const downText = "\u2193 " + formatSpeed(t.speed || 0);
+  const upText = "\u2191 " + formatSpeed(t.uploadSpeed || 0);
+  const etaText = "ETA: " + formatEta(t.timeRemaining);
+  const ratioText = "Ratio: " + (t.ratio || 0).toFixed(2);
 
-  const fill = $("batteryFill");
-  fill.style.width = pct + "%";
-  fill.className = "battery-fill" + (t.status === "completed" ? " completed" : t.status === "paused" ? " paused" : "");
+  const changed = (k, v) => lastDetailHash !== hash || lastDetail[k] !== v;
 
-  let statusText = t.status === "completed" ? "Download complete" :
-                   t.status === "paused" ? "Paused" :
-                   t.speed > 0 ? `Downloading ${formatSpeed(t.speed)}` : "Connecting to peers…";
-  $("detailStatus").textContent = statusText;
+  if (changed("name", t.name)) $("detailName").textContent = t.name || "--";
+  if (changed("size", sizeText)) $("detailSize").textContent = sizeText;
+  if (changed("pct", pct)) $("detailPct").textContent = pct + "%";
+  if (changed("fillClass", fillClass)) {
+    const fill = $("batteryFill");
+    fill.style.width = pct + "%";
+    fill.className = fillClass;
+  }
+  if (changed("status", statusText)) $("detailStatus").textContent = statusText;
+  if (changed("peers", peersText)) $("detailPeers").textContent = peersText;
+  if (changed("down", downText)) $("detailDown").textContent = downText;
+  if (changed("up", upText)) $("detailUp").textContent = upText;
+  if (changed("eta", etaText)) $("detailEta").textContent = etaText;
+  if (changed("ratio", ratioText)) $("detailRatio").textContent = ratioText;
+  if (changed("path", t.path)) $("detailPath").textContent = t.path || "--";
 
-  $("detailPeers").textContent = (t.peers || 0) + " peers";
-  $("detailDown").textContent = "\u2193 " + formatSpeed(t.speed || 0);
-  $("detailUp").textContent = "\u2191 " + formatSpeed(t.uploadSpeed || 0);
-  $("detailEta").textContent = "ETA: " + formatEta(t.timeRemaining);
-  $("detailRatio").textContent = "Ratio: " + (t.ratio || 0).toFixed(2);
-  $("detailPath").textContent = t.path || "--";
+  lastDetailHash = hash;
+  lastDetail = { name: t.name, size: sizeText, pct, fillClass, status: statusText, peers: peersText, down: downText, up: upText, eta: etaText, ratio: ratioText, path: t.path };
 }
 
 // ---------- Torrent List Rendering ----------
@@ -156,15 +174,26 @@ function updateTorrentElement(refs, t) {
                       t.status === "paused" ? "status-paused" : "status-downloading";
   const fillClass = t.status === "completed" ? "completed" : "";
 
-  refs.nameEl.textContent = t.name || "--";
-  refs.badge.className = "status-badge " + statusClass;
-  refs.badge.textContent = t.status;
-  refs.pctEl.textContent = pct + "%";
-  refs.sizeEl.textContent = `${formatBytes(t.downloaded || 0)} / ${formatBytes(t.length || 0)}`;
-  refs.peersEl.textContent = (t.peers || 0) + " peers";
-  refs.speedEl.textContent = formatSpeed(t.speed || 0);
-  refs.fill.className = "progress-fill " + fillClass;
-  refs.fill.style.width = pct + "%";
+  const sizeText = `${formatBytes(t.downloaded || 0)} / ${formatBytes(t.length || 0)}`;
+  const peersText = (t.peers || 0) + " peers";
+  const speedText = formatSpeed(t.speed || 0);
+
+  // Only update DOM when values changed (avoid reflow thrashing)
+  const last = refs._last || {};
+  if (last.name !== t.name) refs.nameEl.textContent = t.name || "--";
+  if (last.status !== t.status) {
+    refs.badge.className = "status-badge " + statusClass;
+    refs.badge.textContent = t.status;
+  }
+  if (last.pct !== pct) refs.pctEl.textContent = pct + "%";
+  if (last.size !== sizeText) refs.sizeEl.textContent = sizeText;
+  if (last.peers !== peersText) refs.peersEl.textContent = peersText;
+  if (last.speed !== speedText) refs.speedEl.textContent = speedText;
+  if (last.fillClass !== fillClass || last.pct !== pct) {
+    refs.fill.className = "progress-fill " + fillClass;
+    refs.fill.style.width = pct + "%";
+  }
+  refs._last = { name: t.name, status: t.status, pct, size: sizeText, peers: peersText, speed: speedText, fillClass };
 
   // Rebuild action buttons only when status changes
   const isActive = t.status === "downloading" || t.status === "paused";
@@ -310,11 +339,15 @@ function updateTorrentElements() {
 
   const currentHashes = new Set(displayTorrents.map(t => t.infoHash));
 
-  // Remove dead elements
-  for (const [hash, { el }] of [...torrentElements]) {
-    if (!currentHashes.has(hash) && el.parentNode) {
-      el.parentNode.removeChild(el);
-      torrentElements.delete(hash);
+  // Remove dead elements (only check every ~5 seconds to avoid thrashing)
+  const now = Date.now();
+  if (now - lastDeadCheck > 5000) {
+    lastDeadCheck = now;
+    for (const [hash, { el }] of [...torrentElements]) {
+      if (!currentHashes.has(hash) && el.parentNode) {
+        el.parentNode.removeChild(el);
+        torrentElements.delete(hash);
+      }
     }
   }
 
@@ -347,7 +380,7 @@ function updateTorrentElements() {
     for (const t of displayTorrents) {
       const item = torrentElements.get(t.infoHash);
       updateTorrentElement(item.refs, t);
-      item.el.classList.toggle("selected", t.infoHash === selectedHash);
+      // Selection is handled by selectTorrent() to avoid O(n) classList toggles every frame
     }
   }
 
@@ -603,6 +636,7 @@ $("magnetModal").querySelector(".modal-backdrop").addEventListener("click", clos
 function showContextMenu(e, infoHash) {
   e.preventDefault();
   contextHash = infoHash;
+  contextMenuOpen = true;
   const menu = $("contextMenu");
   hideSubmenus();
 
@@ -618,6 +652,7 @@ function hideContextMenu() {
   $("contextMenu").classList.remove("show");
   hideSubmenus();
   contextHash = null;
+  contextMenuOpen = false;
 }
 
 function hideSubmenus() {
@@ -770,18 +805,26 @@ $("logModal").querySelector(".modal-backdrop").addEventListener("click", closeLo
 
 let renderPending = false;
 let lastLogTime = 0;
+let contextMenuOpen = false;
+let lastDeadCheck = 0;
 rojoAPI.onTorrentsUpdated((data) => {
   torrents = data.torrents || [];
   const count = torrents.length;
   const label = count === 1 ? "1 transfer" : count + " transfers";
-  $("statusText").textContent = label;
-  $("downSpeed").textContent = formatSpeed(data.downloadSpeed);
-  $("upSpeed").textContent = formatSpeed(data.uploadSpeed);
+  const down = formatSpeed(data.downloadSpeed);
+  const up = formatSpeed(data.uploadSpeed);
+
   if (!renderPending) {
     renderPending = true;
     requestAnimationFrame(() => {
       renderPending = false;
-      updateTorrentElements();
+      // Skip all DOM updates while context menu is open to prevent freezing
+      if (!contextMenuOpen) {
+        $("statusText").textContent = label;
+        $("downSpeed").textContent = down;
+        $("upSpeed").textContent = up;
+        updateTorrentElements();
+      }
     });
   }
   // Log speed updates: at most once every 5 seconds, and only when activity changes
