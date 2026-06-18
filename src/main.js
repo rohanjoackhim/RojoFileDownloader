@@ -76,6 +76,15 @@ function formatSpeedBadge(bps) {
   return Math.round(bps / (k * k * k)) + "G";
 }
 
+function formatSpeed(bps) {
+  if (!bps || bps === 0) return "0 B/s";
+  const k = 1024;
+  if (bps < k) return Math.round(bps) + " B/s";
+  if (bps < k * k) return (bps / k).toFixed(1).replace(/\.0$/, "") + " KB/s";
+  if (bps < k * k * k) return (bps / (k * k)).toFixed(1).replace(/\.0$/, "") + " MB/s";
+  return (bps / (k * k * k)).toFixed(1).replace(/\.0$/, "") + " GB/s";
+}
+
 function updateDockBadge() {
   if (!win || win.isDestroyed()) return;
   if (!isMinimized) {
