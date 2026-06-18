@@ -57,6 +57,7 @@ let win;
 let client;
 const activeTorrents = new Map();
 let isMinimized = false;
+let restartStatsLoop = null; // called when window is recreated after being closed
 
 // Store last used download path
 let lastDownloadPath = DEFAULT_DOWNLOAD_DIR;
@@ -124,6 +125,8 @@ async function createWindow() {
 
   win.once("ready-to-show", () => {
     win.show();
+    // If window was recreated after being closed, restart stats broadcast immediately
+    if (restartStatsLoop) restartStatsLoop();
   });
 
   win.on("minimize", () => {
@@ -177,11 +180,12 @@ async function initWebTorrent() {
   });
 
   // Periodically broadcast stats to renderer (non-blocking loop)
+  // Loop always runs even when window is closed — broadcasts resume when window reopens
   let statsRunning = false;
   async function statsLoop() {
     if (statsRunning) return;
     statsRunning = true;
-    while (client && win && !win.isDestroyed()) {
+    while (client) {
       const list = [];
       for (const t of client.torrents) {
         const entry = activeTorrents.get(t.infoHash);
@@ -198,12 +202,15 @@ async function initWebTorrent() {
         if (t.done) entry.status = "completed";
         list.push({ ...entry });
       }
-      broadcast("torrents-updated", {
-        torrents: list,
-        downloadSpeed: client.downloadSpeed,
-        uploadSpeed: client.uploadSpeed,
-      });
-      updateDockBadge();
+      // Only broadcast if window exists and isn't destroyed
+      if (win && !win.isDestroyed()) {
+        broadcast("torrents-updated", {
+          torrents: list,
+          downloadSpeed: client.downloadSpeed,
+          uploadSpeed: client.uploadSpeed,
+        });
+        updateDockBadge();
+      }
       checkStopRatios();
 
       // Log memory usage every ~10 seconds (when loop counter hits 10)
@@ -218,6 +225,7 @@ async function initWebTorrent() {
     statsRunning = false;
   }
   statsLoop();
+  restartStatsLoop = statsLoop;
 }
 
 async function handleAddMagnet(magnetUri) {
@@ -279,10 +287,12 @@ async function handleAddMagnet(magnetUri) {
 
 async function handleAddTorrentFile(buffer) {
   if (!client) return { ok: false, error: "Engine not ready" };
+  console.log(`[RO^JO] handleAddTorrentFile: buffer=${buffer.byteLength} bytes`);
 
   try {
     const downloadPath = await selectDownloadPath();
     if (!downloadPath) return { ok: false, error: "Download path not selected" };
+    console.log(`[RO^JO] handleAddTorrentFile: downloadPath=${downloadPath}`);
 
     return new Promise((resolve) => {
       let responded = false;
@@ -293,6 +303,7 @@ async function handleAddTorrentFile(buffer) {
           announce: ROJO_CONFIG.announce,
         }, (t) => {
           const actualPath = path.join(downloadPath, t.name);
+          console.log(`[RO^JO] Torrent ready: name="${t.name}", infoHash=${t.infoHash}, path=${actualPath}`);
           activeTorrents.set(t.infoHash, {
             name: t.name,
             infoHash: t.infoHash,
@@ -689,6 +700,7 @@ ipcMain.handle("vpn-load-config", async () => {
 
 // Handle magnet: protocol on macOS
 app.on("open-url", (_event, url) => {
+  console.log(`[RO^JO] open-url: ${url.substring(0, 80)}...`);
   if (url.startsWith("magnet:")) {
     if (win) {
       if (win.isMinimized()) win.restore();
@@ -700,13 +712,19 @@ app.on("open-url", (_event, url) => {
 
 // Handle files dropped on dock on macOS
 app.on("open-file", (_event, filePath) => {
+  console.log(`[RO^JO] open-file: ${filePath}`);
   if (filePath.endsWith(".torrent")) {
     if (win) {
       if (win.isMinimized()) win.restore();
       win.focus();
     }
-    const buf = fs.readFileSync(filePath);
-    handleAddTorrentFile(buf);
+    try {
+      const buf = fs.readFileSync(filePath);
+      console.log(`[RO^JO] Read .torrent file: ${buf.length} bytes`);
+      handleAddTorrentFile(buf);
+    } catch (e) {
+      console.error(`[RO^JO] Failed to read .torrent file: ${e.message}`);
+    }
   }
 });
 
@@ -743,15 +761,24 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on("second-instance", (_event, argv) => {
+    console.log("[RO^JO] second-instance argv:", argv);
     if (win) {
       if (win.isMinimized()) win.restore();
       win.focus();
     }
     // Handle magnet links or .torrent files passed as args
     for (const arg of argv) {
-      if (arg.startsWith("magnet:")) handleAddMagnet(arg);
+      if (arg.startsWith("magnet:")) {
+        console.log("[RO^JO] Handling magnet from second-instance");
+        handleAddMagnet(arg);
+      }
       if (arg.endsWith(".torrent") && fs.existsSync(arg)) {
-        handleAddTorrentFile(fs.readFileSync(arg));
+        console.log("[RO^JO] Handling .torrent from second-instance:", arg);
+        try {
+          handleAddTorrentFile(fs.readFileSync(arg));
+        } catch (e) {
+          console.error(`[RO^JO] Failed to read .torrent from second-instance: ${e.message}`);
+        }
       }
     }
   });
