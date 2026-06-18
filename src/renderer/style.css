@@ -255,17 +255,17 @@ html, body {
 .torrent-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 
 .torrent-item {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px 16px;
+  padding: 8px 12px;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   transition: background 0.15s, border-color 0.15s;
   cursor: pointer;
 }
@@ -280,9 +280,9 @@ html, body {
 }
 
 .torrent-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
   background: var(--bg);
   display: flex;
   align-items: center;
@@ -301,18 +301,18 @@ html, body {
 
 .torrent-name {
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: 0.82rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .torrent-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 0.78rem;
+  gap: 8px;
+  font-size: 0.72rem;
   color: var(--text-muted);
 }
 
@@ -343,11 +343,11 @@ html, body {
 
 .progress-bar {
   width: 100%;
-  height: 4px;
+  height: 3px;
   background: var(--bg);
   border-radius: 2px;
   overflow: hidden;
-  margin-top: 8px;
+  margin-top: 4px;
 }
 
 .progress-fill {
