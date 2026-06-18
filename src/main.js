@@ -211,7 +211,23 @@ async function initWebTorrent() {
         entry.length = t.length;
         entry.timeRemaining = t.timeRemaining || 0;
         if (t.done) entry.status = "completed";
-        list.push({ ...entry });
+        // Avoid spread to reduce GC pressure: push known fields explicitly
+        list.push({
+          name: entry.name,
+          infoHash: entry.infoHash,
+          progress: entry.progress,
+          speed: entry.speed,
+          uploadSpeed: entry.uploadSpeed,
+          peers: entry.peers,
+          status: entry.status,
+          path: entry.path,
+          addedAt: entry.addedAt,
+          downloaded: entry.downloaded,
+          uploaded: entry.uploaded,
+          length: entry.length,
+          timeRemaining: entry.timeRemaining,
+          ratio: entry.ratio,
+        });
       }
       // Only broadcast if window exists and isn't destroyed
       if (win && !win.isDestroyed()) {
@@ -231,7 +247,7 @@ async function initWebTorrent() {
         console.log(`[RO^JO] Memory: rss=${(mem.rss/1048576).toFixed(1)}MB heap=${(mem.heapUsed/1048576).toFixed(1)}MB torrents=${client.torrents.length} conns=${client.maxConns}`);
       }
 
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 1000));
     }
     statsRunning = false;
   }
@@ -386,10 +402,7 @@ async function pauseTorrent(infoHash) {
   if (!client) return { ok: false, error: "Engine not ready" };
   const torrent = await client.get(infoHash);
   if (!torrent) return { ok: false, error: "Torrent not found" };
-  // WebTorrent pause doesn't always fully stop connections,
-  // so we also set maxConns to 0 to force zero new piece requests.
   torrent.pause();
-  torrent.maxConns = 0;
   const entry = activeTorrents.get(infoHash);
   if (entry) {
     entry.status = "paused";
@@ -406,7 +419,6 @@ async function resumeTorrent(infoHash) {
   const torrent = await client.get(infoHash);
   if (!torrent) return { ok: false, error: "Torrent not found" };
   torrent.resume();
-  torrent.maxConns = 100; // restore per-torrent connections
   const entry = activeTorrents.get(infoHash);
   if (entry) {
     entry.status = "downloading";
