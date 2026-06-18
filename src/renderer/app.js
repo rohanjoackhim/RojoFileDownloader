@@ -1043,6 +1043,12 @@ function closeVpnModal() {
   $("vpnSuccess").textContent = "";
 }
 
+function isUserCanceledError(err) {
+  if (!err) return false;
+  const s = String(err).toLowerCase();
+  return s.includes("user canceled") || s.includes("(-128)") || s.includes("user cancelled");
+}
+
 async function connectVpn() {
   const config = $("vpnConfigInput").value.trim();
   if (!config) {
@@ -1063,11 +1069,22 @@ async function connectVpn() {
       updateVpnUI({ active: true, address: res.address });
     } else {
       $("vpnSuccess").textContent = "";
-      $("vpnError").textContent = res.error || "Failed to connect.";
+      const err = res.error || "Failed to connect.";
+      // Don't show error if user canceled the elevation dialog
+      if (isUserCanceledError(err)) {
+        $("vpnError").textContent = "";
+      } else {
+        $("vpnError").textContent = err;
+      }
     }
   } catch (e) {
     $("vpnSuccess").textContent = "";
-    $("vpnError").textContent = e.message;
+    const err = e.message || String(e);
+    if (isUserCanceledError(err)) {
+      $("vpnError").textContent = "";
+    } else {
+      $("vpnError").textContent = err;
+    }
   }
 }
 
