@@ -81,18 +81,24 @@ function updateDockBadge() {
     return;
   }
 
-  // Compute best progress and total speed
-  let totalSpeed = 0;
+  // Compute best progress and total speeds
+  let totalDl = 0;
+  let totalUl = 0;
   let bestProgress = 0;
   for (const t of client.torrents) {
-    totalSpeed += t.downloadSpeed;
+    totalDl += t.downloadSpeed;
+    totalUl += t.uploadSpeed;
     if (t.progress > bestProgress) bestProgress = t.progress;
   }
 
-  // Badge shows download speed (macOS only)
+  // Badge shows down/up speeds with arrows (macOS dock badge is always red — system limitation)
   if (process.platform === "darwin" && app.dock) {
-    const badge = formatSpeedBadge(totalSpeed);
-    app.dock.setBadge(badge);
+    const dl = formatSpeedBadge(totalDl);
+    const ul = formatSpeedBadge(totalUl);
+    let badge = "";
+    if (dl) badge += "\u2193" + dl;
+    if (ul) badge += (badge ? " " : "") + "\u2191" + ul;
+    app.dock.setBadge(badge || " ");
   }
 
   // Progress bar under dock/taskbar icon
