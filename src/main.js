@@ -159,7 +159,7 @@ async function restoreTorrents() {
   }
 }
 
-function updateDockBadge() {
+function updateDockBadge(bestProgress, totalDl, totalUl) {
   if (!win || win.isDestroyed()) return;
   if (!isMinimized) {
     if (process.platform === "darwin" && app.dock) {
@@ -167,16 +167,6 @@ function updateDockBadge() {
     }
     win.setProgressBar(-1);
     return;
-  }
-
-  // Compute best progress and total speeds
-  let totalDl = 0;
-  let totalUl = 0;
-  let bestProgress = 0;
-  for (const t of client.torrents) {
-    totalDl += t.downloadSpeed;
-    totalUl += t.uploadSpeed;
-    if (t.progress > bestProgress) bestProgress = t.progress;
   }
 
   // Badge shows down/up speeds (macOS dock badge is very small — keep it compact)
@@ -274,15 +264,18 @@ async function initWebTorrent() {
     broadcast("torrent-error", err.message);
   });
 
-  // Periodically broadcast stats to renderer (non-blocking loop, every 2s)
+  // Periodically broadcast stats to renderer (adaptive interval: 2-4s)
   let statsRunning = false;
-  let lastBroadcastStr = "";
+  let lastHash = 0;
   async function statsLoop() {
     if (statsRunning) return;
     statsRunning = true;
     while (client && !isQuitting) {
       try {
         const list = [];
+        let bestProgress = 0;
+        let totalDl = 0;
+        let totalUl = 0;
         for (const t of client.torrents) {
           let entry = activeTorrents.get(t.infoHash);
           if (!entry) {
@@ -346,24 +339,39 @@ async function initWebTorrent() {
             timeRemaining: entry.timeRemaining,
             ratio: entry.ratio,
           });
+
+          totalDl += entry.speed;
+          totalUl += entry.uploadSpeed;
+          if (entry.progress > bestProgress) bestProgress = entry.progress;
         }
 
         const dlSpeed = Math.round((client.downloadSpeed || 0) / 1024) * 1024;
         const ulSpeed = Math.round((client.uploadSpeed || 0) / 1024) * 1024;
-        const payload = { torrents: list, downloadSpeed: dlSpeed, uploadSpeed: ulSpeed };
-        const payloadStr = JSON.stringify(payload);
 
-        // Only broadcast if data actually changed
-        if (payloadStr !== lastBroadcastStr) {
-          lastBroadcastStr = payloadStr;
+        // Lightweight hash dedup (cheaper than JSON.stringify)
+        let hash = 0;
+        for (const t of list) {
+          hash = ((hash << 5) - hash + t.infoHash.charCodeAt(0)) | 0;
+          hash = ((hash << 5) - hash + (t.progress * 1000) | 0) | 0;
+          hash = ((hash << 5) - hash + (t.speed / 1024) | 0) | 0;
+          hash = ((hash << 5) - hash + t.peers) | 0;
+        }
+        hash = ((hash << 5) - hash + (dlSpeed / 1024) | 0) | 0;
+        hash = ((hash << 5) - hash + (ulSpeed / 1024) | 0) | 0;
+
+        if (hash !== lastHash) {
+          lastHash = hash;
           if (win && !win.isDestroyed()) {
-            broadcast("torrents-updated", payload);
-            updateDockBadge();
+            broadcast("torrents-updated", { torrents: list, downloadSpeed: dlSpeed, uploadSpeed: ulSpeed });
+            // Only update dock badge when window is minimized to save CPU
+            if (isMinimized) {
+              updateDockBadge(bestProgress, totalDl, totalUl);
+            }
           }
         }
         await checkStopRatios();
 
-        // Log memory every 30 iterations (~60s)
+        // Log memory every 30 iterations
         statsLoop.counter = (statsLoop.counter || 0) + 1;
         if (statsLoop.counter % 30 === 0) {
           const mem = process.memoryUsage();
@@ -372,7 +380,9 @@ async function initWebTorrent() {
       } catch (err) {
         console.error("[RO^JO] statsLoop error:", err.message);
       }
-      await new Promise(r => setTimeout(r, 2000));
+      // Adaptive interval: 2s idle, up to 4s when downloading fast (>5MB/s)
+      const interval = client.downloadSpeed > 5 * 1024 * 1024 ? 4000 : 2000;
+      await new Promise(r => setTimeout(r, interval));
     }
     statsRunning = false;
   }
