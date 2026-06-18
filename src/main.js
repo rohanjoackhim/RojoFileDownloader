@@ -440,23 +440,88 @@ ipcMain.handle("set-as-default", () => {
   const magnetOk = app.setAsDefaultProtocolClient("magnet");
   const results = { magnet: magnetOk };
 
-  // On Windows, also try to register .torrent file association
   if (process.platform === "win32") {
     try {
       const { execSync } = require("child_process");
       const appPath = process.execPath;
-      // Register .torrent extension
       execSync(`reg add "HKEY_CURRENT_USER\\Software\\Classes\\.torrent" /ve /d "RojoTorrent" /f`);
-      execSync(`reg add "HKEY_CURRENT_USER\\Software\\Classes\\RojoTorrent\\shell\\open\\command" /ve /d "\\"${appPath}\\" \"%1\\"" /f`);
+      execSync(`reg add "HKEY_CURRENT_USER\\Software\\Classes\\RojoTorrent\\shell\\open\\command" /ve /d "\\"${appPath}\\" "%1\\"" /f`);
       results.torrent = true;
     } catch (e) {
       console.warn("[RO^JO] Failed to register .torrent on Windows:", e.message);
       results.torrent = false;
       results.torrentError = e.message;
     }
+  } else if (process.platform === "darwin") {
+    // Register ROJO as default app for .torrent files on macOS
+    try {
+      const { execSync } = require("child_process");
+      const appPath = process.platform === "darwin" ? process.execPath.replace(/\/Contents\/MacOS\/.*$/, "") : process.execPath;
+
+      // Register app with Launch Services
+      try {
+        execSync(`/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "${appPath}"`, { stdio: "ignore" });
+      } catch (e) { /* ignore */ }
+
+      // Use Python to modify LaunchServices plist (built-in on all Macs)
+      const pythonScript = `
+import plistlib, os, subprocess
+
+# Register the app
+app_path = "${appPath}"
+if os.path.exists(app_path):
+    subprocess.run([
+        "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister",
+        "-f", app_path
+    ], check=False, capture_output=True)
+
+# Build handler entry for .torrent extension
+handler = {
+    "LSHandlerContentTag": "torrent",
+    "LSHandlerContentTagClass": "public.filename-extension",
+    "LSHandlerRoleAll": "com.rojo.torrent"
+}
+
+plist_paths = [
+    os.path.expanduser("~/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist"),
+    os.path.expanduser("~/Library/Preferences/com.apple.LaunchServices.plist")
+]
+
+for plist_path in plist_paths:
+    try:
+        os.makedirs(os.path.dirname(plist_path), exist_ok=True)
+        if os.path.exists(plist_path):
+            with open(plist_path, "rb") as f:
+                plist = plistlib.load(f)
+        else:
+            plist = {"LSHandlers": []}
+
+        # Remove existing .torrent handlers
+        plist["LSHandlers"] = [
+            h for h in plist.get("LSHandlers", [])
+            if not (h.get("LSHandlerContentTag") == "torrent" and h.get("LSHandlerContentTagClass") == "public.filename-extension")
+        ]
+        plist["LSHandlers"].append(handler)
+
+        with open(plist_path, "wb") as f:
+            plistlib.dump(plist, f)
+    except Exception as e:
+        print(f"plist error: {e}")
+
+print("done")
+`;
+      execSync(`python3 -c '${pythonScript.replace(/'/g, "'\\''")}'`, { stdio: ["ignore", "pipe", "pipe"] });
+
+      // Restart Finder so it picks up the change
+      try { execSync("killall Finder", { stdio: "ignore" }); } catch (e) { /* ignore */ }
+
+      results.torrent = true;
+    } catch (e) {
+      console.warn("[RO^JO] Failed to register .torrent on macOS:", e.message);
+      results.torrent = false;
+      results.torrentError = e.message;
+    }
   } else {
-    // On macOS/Linux, file associations are handled via Info.plist / .desktop files.
-    // The app already declares them in package.json build config.
     results.torrent = "manual";
   }
 
