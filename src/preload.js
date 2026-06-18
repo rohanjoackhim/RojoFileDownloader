@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld("rojoAPI", {
   openFolder: () => ipcRenderer.invoke("open-folder"),
   openTorrentFolder: (path) => ipcRenderer.invoke("open-torrent-folder", path),
   selectFile: () => ipcRenderer.invoke("select-file"),
+  selectConfFile: () => ipcRenderer.invoke("select-conf-file"),
   getDownloadPath: () => ipcRenderer.invoke("get-download-path"),
   setAsDefault: () => ipcRenderer.invoke("set-as-default"),
   checkIsDefault: () => ipcRenderer.invoke("check-is-default"),

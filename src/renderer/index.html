@@ -116,16 +116,24 @@
   <div id="vpnModal" class="modal">
     <div class="modal-backdrop"></div>
     <div class="modal-content modal-content--wide">
-      <h3>WireGuard VPN</h3>
-      <p class="modal-hint">Paste your WireGuard config below to hide torrent traffic from your ISP.</p>
-      <textarea id="vpnConfigInput" rows="10" placeholder="[Interface]\nPrivateKey = ...\nAddress = 10.0.0.2/24\nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = ...\nAllowedIPs = 0.0.0.0/0\nEndpoint = vpn.example.com:51820\nPersistentKeepalive = 25"></textarea>
+      <div class="modal-header">
+        <h3>WireGuard VPN</h3>
+        <button class="modal-close" id="btnVpnClose">&times;</button>
+      </div>
+      <p class="modal-hint">Paste your WireGuard config below or import a <span class="code-tag">.conf</span> file. By default all traffic uses the VPN (full tunnel). Use split-tunnel only if your provider supports it.</p>
+      <button class="btn btn-import" id="btnVpnImport">Import .conf file</button>
+      <textarea id="vpnConfigInput" rows="10" placeholder="[Interface]\nAddress = 10.0.0.2/24\nDNS = 1.1.1.1,8.8.8.8\nPrivateKey = ...\n\n[Peer]\nPublicKey=...\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = vpn.example.com:51820\nPersistentKeepalive = 25"></textarea>
+      <div class="vpn-split-section">
+        <label for="vpnSplitTunnel">Split-tunnel hosts (optional)</label>
+        <input type="text" id="vpnSplitTunnel" placeholder="bttpxnzcop.top, provider.com" />
+        <p class="vpn-warning">Only route traffic to these hostnames through the VPN. Leave blank for full tunnel.<span class="warn-bold">Warning:</span> Some providers use dynamic redirects that split tunneling cannot follow. If streams fail, clear this field.</p>
+      </div>
       <div id="vpnError" class="error-msg"></div>
       <div id="vpnSuccess" class="success-msg"></div>
-      <div class="modal-actions">
-        <button class="btn btn-secondary" id="btnVpnCancel">Close</button>
-        <button class="btn btn-ghost" id="btnVpnTest">Test</button>
-        <button class="btn btn-danger" id="btnVpnDisconnect">Disconnect</button>
-        <button class="btn btn-primary" id="btnVpnConnect">Connect</button>
+      <div class="vpn-actions">
+        <button class="btn btn-connect" id="btnVpnConnect">Connect</button>
+        <button class="btn btn-text" id="btnVpnTest">Test VPN</button>
+        <button class="btn btn-text" id="btnVpnDisconnect">Disconnect</button>
       </div>
     </div>
   </div>

@@ -1049,10 +1049,14 @@ async function connectVpn() {
     $("vpnError").textContent = "Paste your WireGuard config first.";
     return;
   }
+  const splitTunnelRaw = $("vpnSplitTunnel").value.trim();
+  const splitTunnelHosts = splitTunnelRaw
+    ? splitTunnelRaw.split(",").map(s => s.trim()).filter(Boolean)
+    : [];
   $("vpnError").textContent = "";
   $("vpnSuccess").textContent = "Connecting…";
   try {
-    const res = await rojoAPI.vpnConnect(config);
+    const res = await rojoAPI.vpnConnect(config, splitTunnelHosts);
     if (res.ok) {
       $("vpnSuccess").textContent = `Connected! Tunnel: ${res.address ?? "unknown"}`;
       await rojoAPI.vpnSaveConfig(config);
@@ -1108,11 +1112,25 @@ setInterval(refreshVpnStatus, 5000);
 // ---------- Event Wiring ----------
 
 $("btnVpnToggle").addEventListener("click", openVpnModal);
-$("btnVpnCancel").addEventListener("click", closeVpnModal);
+$("btnVpnClose").addEventListener("click", closeVpnModal);
 $("btnVpnConnect").addEventListener("click", connectVpn);
 $("btnVpnDisconnect").addEventListener("click", disconnectVpn);
 $("btnVpnTest").addEventListener("click", testVpn);
 $("vpnModal").querySelector(".modal-backdrop").addEventListener("click", closeVpnModal);
+
+// Import .conf file
+$("btnVpnImport").addEventListener("click", async () => {
+  try {
+    const result = await rojoAPI.selectConfFile();
+    if (result && result.content) {
+      $("vpnConfigInput").value = result.content;
+      $("vpnError").textContent = "";
+      $("vpnSuccess").textContent = "Config imported from " + (result.fileName || ".conf file");
+    }
+  } catch (e) {
+    $("vpnError").textContent = e.message || "Failed to import file.";
+  }
+});
 
 // ---------- Init ----------
 

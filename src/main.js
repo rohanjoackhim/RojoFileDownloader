@@ -716,6 +716,17 @@ ipcMain.handle("select-file", async () => {
   return { name: path.basename(filePath), buffer: buffer.buffer };
 });
 
+ipcMain.handle("select-conf-file", async () => {
+  const result = await dialog.showOpenDialog(win, {
+    properties: ["openFile"],
+    filters: [{ name: "WireGuard Config", extensions: ["conf"] }],
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  const filePath = result.filePaths[0];
+  const content = fs.readFileSync(filePath, "utf8");
+  return { fileName: path.basename(filePath), content };
+});
+
 ipcMain.handle("get-download-path", () => {
   return lastDownloadPath;
 });
