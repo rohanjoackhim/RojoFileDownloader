@@ -147,6 +147,9 @@ function createTorrentElement(t) {
   const speedEl = document.createElement("span");
   meta.appendChild(speedEl);
 
+  const etaEl = document.createElement("span");
+  meta.appendChild(etaEl);
+
   info.appendChild(meta);
 
   const bar = document.createElement("div");
@@ -164,7 +167,7 @@ function createTorrentElement(t) {
 
   return {
     el,
-    refs: { nameEl, badge, pctEl, sizeEl, peersEl, speedEl, fill, actions },
+    refs: { nameEl, badge, pctEl, sizeEl, peersEl, speedEl, etaEl, fill, actions },
   };
 }
 
@@ -177,6 +180,7 @@ function updateTorrentElement(refs, t) {
   const sizeText = `${formatBytes(t.downloaded || 0)} / ${formatBytes(t.length || 0)}`;
   const peersText = (t.peers || 0) + " peers";
   const speedText = formatSpeed(t.speed || 0);
+  const etaText = formatEta(t.timeRemaining);
 
   // Only update DOM when values changed (avoid reflow thrashing)
   const last = refs._last || {};
@@ -189,11 +193,12 @@ function updateTorrentElement(refs, t) {
   if (last.size !== sizeText) refs.sizeEl.textContent = sizeText;
   if (last.peers !== peersText) refs.peersEl.textContent = peersText;
   if (last.speed !== speedText) refs.speedEl.textContent = speedText;
+  if (last.eta !== etaText) refs.etaEl.textContent = etaText;
   if (last.fillClass !== fillClass || last.pct !== pct) {
     refs.fill.className = "progress-fill " + fillClass;
     refs.fill.style.width = pct + "%";
   }
-  refs._last = { name: t.name, status: t.status, pct, size: sizeText, peers: peersText, speed: speedText, fillClass };
+  refs._last = { name: t.name, status: t.status, pct, size: sizeText, peers: peersText, speed: speedText, eta: etaText, fillClass };
 
   // Rebuild action buttons only when status changes
   const isActive = t.status === "downloading" || t.status === "paused";
