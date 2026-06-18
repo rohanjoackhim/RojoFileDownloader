@@ -468,7 +468,6 @@ async function removeTorrent(infoHash) {
 
   try {
     await rojoAPI.removeTorrent(infoHash, false);
-    showToast("Removed from list");
   } catch (e) {
     showToast("Remove failed", "error");
   }
@@ -484,7 +483,6 @@ async function deleteWithFiles(infoHash) {
 
   try {
     await rojoAPI.removeTorrent(infoHash, true);
-    showToast("Deleted with files");
   } catch (e) {
     showToast("Delete failed", "error");
   }
