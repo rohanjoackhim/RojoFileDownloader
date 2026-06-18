@@ -211,7 +211,7 @@ async function initWebTorrent() {
         });
         updateDockBadge();
       }
-      checkStopRatios();
+      await checkStopRatios();
 
       // Log memory usage every ~10 seconds (when loop counter hits 10)
       statsLoop.counter = (statsLoop.counter || 0) + 1;
@@ -345,9 +345,9 @@ async function handleAddTorrentFile(buffer) {
   }
 }
 
-function removeTorrent(infoHash, deleteFiles = false) {
+async function removeTorrent(infoHash, deleteFiles = false) {
   if (!client) return { ok: false, error: "Engine not ready" };
-  const torrent = client.get(infoHash);
+  const torrent = await client.get(infoHash);
   if (!torrent) return { ok: false, error: "Torrent not found" };
 
   return new Promise((resolve) => {
@@ -359,9 +359,9 @@ function removeTorrent(infoHash, deleteFiles = false) {
   });
 }
 
-function pauseTorrent(infoHash) {
+async function pauseTorrent(infoHash) {
   if (!client) return { ok: false, error: "Engine not ready" };
-  const torrent = client.get(infoHash);
+  const torrent = await client.get(infoHash);
   if (!torrent) return { ok: false, error: "Torrent not found" };
   // WebTorrent pause doesn't always fully stop connections,
   // so we also set maxConns to 0 to force zero new piece requests.
@@ -372,9 +372,9 @@ function pauseTorrent(infoHash) {
   return { ok: true };
 }
 
-function resumeTorrent(infoHash) {
+async function resumeTorrent(infoHash) {
   if (!client) return { ok: false, error: "Engine not ready" };
-  const torrent = client.get(infoHash);
+  const torrent = await client.get(infoHash);
   if (!torrent) return { ok: false, error: "Torrent not found" };
   torrent.resume();
   torrent.maxConns = 100; // restore per-torrent connections
@@ -415,11 +415,11 @@ ipcMain.handle("remove-torrent", async (_event, infoHash, deleteFiles) => {
 });
 
 ipcMain.handle("pause-torrent", async (_event, infoHash) => {
-  return pauseTorrent(infoHash);
+  return await pauseTorrent(infoHash);
 });
 
 ipcMain.handle("resume-torrent", async (_event, infoHash) => {
-  return resumeTorrent(infoHash);
+  return await resumeTorrent(infoHash);
 });
 
 ipcMain.handle("open-folder", async () => {
@@ -543,7 +543,7 @@ print("done")
 
 ipcMain.handle("get-magnet-uri", async (_evt, infoHash) => {
   if (!client) return null;
-  const torrent = client.get(infoHash);
+  const torrent = await client.get(infoHash);
   return torrent ? torrent.magnetURI : null;
 });
 
@@ -555,10 +555,10 @@ function clearThrottle(infoHash) {
   if (t) { clearInterval(t.interval); speedThrottles.delete(infoHash); }
 }
 
-function setTorrentThrottle(infoHash, dlLimit, ulLimit) {
+async function setTorrentThrottle(infoHash, dlLimit, ulLimit) {
   clearThrottle(infoHash);
   if (!client) return;
-  const torrent = client.get(infoHash);
+  const torrent = await client.get(infoHash);
   if (!torrent) return;
   if ((!dlLimit || dlLimit <= 0) && (!ulLimit || ulLimit <= 0)) return;
 
@@ -566,8 +566,8 @@ function setTorrentThrottle(infoHash, dlLimit, ulLimit) {
   let lastUploaded = torrent.uploaded || 0;
   let paused = false;
 
-  const interval = setInterval(() => {
-    const t = client.get(infoHash);
+  const interval = setInterval(async () => {
+    const t = await client.get(infoHash);
     if (!t) { clearThrottle(infoHash); return; }
 
     const dlDelta = t.downloaded - lastDownloaded;
@@ -590,15 +590,15 @@ function setTorrentThrottle(infoHash, dlLimit, ulLimit) {
 
 ipcMain.handle("limit-speed", async (_evt, infoHash, dlBytes, ulBytes) => {
   if (!client) return { ok: false, error: "Engine not ready" };
-  const torrent = client.get(infoHash);
+  const torrent = await client.get(infoHash);
   if (!torrent) return { ok: false, error: "Torrent not found" };
-  setTorrentThrottle(infoHash, dlBytes || 0, ulBytes || 0);
+  await setTorrentThrottle(infoHash, dlBytes || 0, ulBytes || 0);
   return { ok: true };
 });
 
 ipcMain.handle("recheck-torrent", async (_evt, infoHash) => {
   if (!client) return { ok: false, error: "Engine not ready" };
-  const torrent = client.get(infoHash);
+  const torrent = await client.get(infoHash);
   if (!torrent) return { ok: false, error: "Torrent not found" };
   // Re-check: destroy store and re-verify
   try {
@@ -623,11 +623,11 @@ ipcMain.handle("set-stop-ratio", async (_evt, infoHash, ratio) => {
 });
 
 // Check stop ratios in the stats loop
-function checkStopRatios() {
+async function checkStopRatios() {
   for (const [infoHash, target] of stopRatios) {
     const entry = activeTorrents.get(infoHash);
     if (entry && entry.ratio >= target && entry.status !== "paused") {
-      pauseTorrent(infoHash);
+      await pauseTorrent(infoHash);
       broadcast("torrent-auto-paused", { name: entry.name, ratio: target });
     }
   }
