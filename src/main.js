@@ -1208,49 +1208,38 @@ ipcMain.handle("cancel-file-selection", async (_evt, infoHash) => {
   }
 });
 
+// Buffer for files/URLs that arrive before the app is fully ready
+const pendingFiles = [];
+const pendingUrls = [];
+
 // Handle magnet: protocol on macOS
-app.on("open-url", async (event, url) => {
+app.on("open-url", (event, url) => {
   event.preventDefault();
-  console.log(`[RO^JO] open-url: ${url.substring(0, 80)}...`);
   if (url.startsWith("magnet:")) {
-    if (win) {
-      if (win.isMinimized()) win.restore();
-      win.focus();
-    }
-    const result = await handleAddMagnet(url);
-    if (result.duplicate) {
-      const { response } = await dialog.showMessageBox(win, {
-        type: "question",
-        buttons: ["Cancel", "Replace"],
-        defaultId: 1,
-        title: "Duplicate Torrent",
-        message: `"${result.name}" is already in your download list.`,
-        detail: "Do you want to remove the old one and add it again?",
-      });
-      if (response === 1) {
-        // User clicked Replace
-        await removeTorrent(result.infoHash, true);
-        await handleAddMagnet(url);
-      }
+    if (client) {
+      handleAddMagnet(url);
+    } else {
+      pendingUrls.push(url);
     }
   }
 });
 
-// Handle files dropped on dock on macOS
-app.on("open-file", async (event, filePath) => {
+// Handle files dropped on dock / double-clicked on macOS
+app.on("open-file", (event, filePath) => {
   event.preventDefault();
-  console.log(`[RO^JO] open-file: ${filePath}`);
   if (filePath.endsWith(".torrent")) {
     if (win) {
       if (win.isMinimized()) win.restore();
       win.focus();
     }
-    try {
-      const buf = fs.readFileSync(filePath);
-      console.log(`[RO^JO] Read .torrent file: ${buf.length} bytes`);
-      await handleAddTorrentFile(buf);
-    } catch (e) {
-      console.error(`[RO^JO] Failed to read .torrent file: ${e.message}`);
+    if (client) {
+      try {
+        handleAddTorrentFile(fs.readFileSync(filePath));
+      } catch (e) {
+        console.error(`[RO^JO] Failed to read .torrent file: ${e.message}`);
+      }
+    } else {
+      pendingFiles.push(filePath);
     }
   }
 });
@@ -1265,6 +1254,21 @@ app.whenReady().then(async () => {
   await initWebTorrent();
   await restoreTorrents();
   await createWindow();
+
+  // Process any files/URLs that arrived before the app was ready
+  for (const filePath of pendingFiles) {
+    try {
+      handleAddTorrentFile(fs.readFileSync(filePath));
+    } catch (e) {
+      console.error(`[RO^JO] Failed to process pending .torrent file: ${e.message}`);
+    }
+  }
+  pendingFiles.length = 0;
+
+  for (const url of pendingUrls) {
+    handleAddMagnet(url);
+  }
+  pendingUrls.length = 0;
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
