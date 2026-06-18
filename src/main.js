@@ -394,8 +394,7 @@ async function handleAddMagnet(magnetUri) {
   if (!client) return { ok: false, error: "Engine not ready" };
 
   try {
-    const downloadPath = await selectDownloadPath();
-    if (!downloadPath) return { ok: false, error: "Download path not selected" };
+    const downloadPath = DEFAULT_DOWNLOAD_DIR;
 
     // Extract display name from magnet URI so we can show the human-readable name
     let displayName;
@@ -405,12 +404,9 @@ async function handleAddMagnet(magnetUri) {
       if (displayName) displayName = decodeURIComponent(displayName).replace(/\+/g, " ");
     } catch (e) { /* ignore malformed URIs */ }
 
-    // debug: console.log(`[RO^JO] handleAddMagnet: path=${downloadPath}, displayName=${displayName || "N/A"}`);
-
     // Check if torrent already exists in activeTorrents (duplicate check)
     for (const [infoHash, entry] of activeTorrents) {
       if (magnetUri.includes(infoHash)) {
-        // debug: duplicate detected
         return {
           ok: false,
           duplicate: true,
@@ -424,10 +420,7 @@ async function handleAddMagnet(magnetUri) {
     // Check if torrent already exists in client (from previous failed add)
     const existingTorrent = client.torrents.find(t => magnetUri.includes(t.infoHash));
     if (existingTorrent) {
-      // debug: already in client
-      // If it's in client but not in activeTorrents, re-add it to the map
       if (!activeTorrents.has(existingTorrent.infoHash)) {
-        // debug: re-adding to activeTorrents
         const actualPath = path.join(downloadPath, existingTorrent.name);
         activeTorrents.set(existingTorrent.infoHash, {
           name: displayName || existingTorrent.name,
@@ -443,7 +436,6 @@ async function handleAddMagnet(magnetUri) {
         });
         return { ok: true, infoHash: existingTorrent.infoHash, name: displayName || existingTorrent.name };
       } else {
-        // debug: already in activeTorrents
         const entry = activeTorrents.get(existingTorrent.infoHash);
         return {
           ok: false,
@@ -463,13 +455,11 @@ async function handleAddMagnet(magnetUri) {
           path: downloadPath,
           announce: ROJO_CONFIG.announce,
         }, (t) => {
-          // debug: metadata received
-          // Deselect all files initially, then show file picker
-          t.files.forEach(f => f.deselect());
+          // Auto-select all files so download starts immediately
+          t.files.forEach(f => f.select());
 
-          // If single file, auto-select it and add immediately
+          // Single file: add to activeTorrents immediately
           if (t.files.length <= 1) {
-            if (t.files[0]) t.files[0].select();
             const actualPath = path.join(downloadPath, t.name);
             activeTorrents.set(t.infoHash, {
               name: displayName || t.name,
@@ -484,12 +474,11 @@ async function handleAddMagnet(magnetUri) {
               length: t.length || 0,
               magnetUri: magnetUri,
             });
-            // debug: single-file torrent added
             if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: displayName || t.name }); }
             return;
           }
 
-          // Multiple files: store in pending and show file picker
+          // Multiple files: add to activeTorrents immediately AND show file picker
           const fileList = t.files.map((f, i) => ({
             index: i,
             name: f.name,
@@ -503,7 +492,20 @@ async function handleAddMagnet(magnetUri) {
             magnetUri,
             fileList,
           });
-          // debug: showing file picker
+          const actualPath = path.join(downloadPath, t.name);
+          activeTorrents.set(t.infoHash, {
+            name: displayName || t.name,
+            infoHash: t.infoHash,
+            progress: 0,
+            speed: 0,
+            peers: 0,
+            status: "downloading",
+            path: actualPath,
+            addedAt: Date.now(),
+            downloaded: 0,
+            length: t.length || 0,
+            magnetUri: magnetUri,
+          });
           broadcast("show-file-picker", {
             infoHash: t.infoHash,
             name: displayName || t.name,
@@ -511,7 +513,6 @@ async function handleAddMagnet(magnetUri) {
           });
           if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: displayName || t.name, filePicker: true }); }
         });
-        // debug: waiting for metadata
       } catch (err) {
         console.error(`[RO^JO] Error adding torrent to client:`, err.message);
         if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
@@ -531,7 +532,6 @@ async function handleAddMagnet(magnetUri) {
 
       setTimeout(() => {
         if (!responded) {
-          // debug: metadata timeout
           responded = true;
           resolve({ ok: false, error: "Timed out waiting for torrent metadata. Your ISP may block DHT/trackers." });
         }
@@ -545,12 +545,9 @@ async function handleAddMagnet(magnetUri) {
 
 async function handleAddTorrentFile(buffer) {
   if (!client) return { ok: false, error: "Engine not ready" };
-  // debug: handleAddTorrentFile
 
   try {
-    const downloadPath = await selectDownloadPath();
-    if (!downloadPath) return { ok: false, error: "Download path not selected" };
-    // debug: downloadPath selected
+    const downloadPath = DEFAULT_DOWNLOAD_DIR;
 
     return new Promise((resolve) => {
       let responded = false;
@@ -561,9 +558,8 @@ async function handleAddTorrentFile(buffer) {
           announce: ROJO_CONFIG.announce,
         }, (t) => {
           const actualPath = path.join(downloadPath, t.name);
-          // debug: torrent ready
-          // Deselect all files initially
-          t.files.forEach(f => f.deselect());
+          // Auto-select all files so download starts immediately
+          t.files.forEach(f => f.select());
 
           // Save .torrent file buffer for persistence
           const torrentFilePath = path.join(TORRENTS_FILES_DIR, `${t.infoHash}.torrent`);
@@ -573,9 +569,8 @@ async function handleAddTorrentFile(buffer) {
             console.error("[RO^JO] Failed to save .torrent file:", e.message);
           }
 
-          // If single file, auto-select and add immediately
+          // Single file: add to activeTorrents immediately
           if (t.files.length <= 1) {
-            if (t.files[0]) t.files[0].select();
             activeTorrents.set(t.infoHash, {
               name: t.name,
               infoHash: t.infoHash,
@@ -593,7 +588,7 @@ async function handleAddTorrentFile(buffer) {
             return;
           }
 
-          // Multiple files: store pending and show file picker
+          // Multiple files: add to activeTorrents immediately AND show file picker
           const fileList = t.files.map((f, i) => ({
             index: i,
             name: f.name,
@@ -607,7 +602,19 @@ async function handleAddTorrentFile(buffer) {
             torrentFilePath,
             fileList,
           });
-          console.log(`[RO^JO] Showing file picker for ${t.name} with ${fileList.length} files`);
+          activeTorrents.set(t.infoHash, {
+            name: t.name,
+            infoHash: t.infoHash,
+            progress: 0,
+            speed: 0,
+            peers: 0,
+            status: "downloading",
+            path: actualPath,
+            addedAt: Date.now(),
+            downloaded: 0,
+            length: t.length || 0,
+            torrentFilePath: torrentFilePath,
+          });
           broadcast("show-file-picker", {
             infoHash: t.infoHash,
             name: t.name,
@@ -1186,27 +1193,17 @@ ipcMain.handle("confirm-file-selection", async (_evt, infoHash, selectedIndices)
 
   try {
     const t = pending.torrent;
-    // Select only the checked files
+    // Deselect all first, then select only the checked files
+    t.files.forEach(f => f.deselect());
     selectedIndices.forEach(idx => {
       if (t.files[idx]) t.files[idx].select();
     });
 
-    // Add to active torrents
-    const actualPath = path.join(pending.downloadPath, t.name);
-    activeTorrents.set(infoHash, {
-      name: pending.displayName || t.name,
-      infoHash: infoHash,
-      progress: 0,
-      speed: 0,
-      peers: 0,
-      status: "downloading",
-      path: actualPath,
-      addedAt: Date.now(),
-      downloaded: 0,
-      length: t.length || 0,
-      magnetUri: pending.magnetUri,
-      torrentFilePath: pending.torrentFilePath,
-    });
+    // Update active torrent entry if it exists
+    const entry = activeTorrents.get(infoHash);
+    if (entry) {
+      entry.length = selectedIndices.reduce((sum, idx) => sum + (t.files[idx]?.length || 0), 0);
+    }
     pendingFileSelection.delete(infoHash);
     console.log(`[RO^JO] File selection confirmed for ${infoHash}, selected ${selectedIndices.length} files`);
     return { ok: true, infoHash, name: pending.displayName || t.name };
