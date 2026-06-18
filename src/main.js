@@ -279,6 +279,33 @@ async function handleAddMagnet(magnetUri) {
 
     console.log(`[RO^JO] handleAddMagnet: path=${downloadPath}, displayName=${displayName || "N/A"}`);
 
+    // Check if torrent already exists in client (from previous failed add)
+    const existingTorrent = client.torrents.find(t => magnetUri.includes(t.infoHash));
+    if (existingTorrent) {
+      console.log(`[RO^JO] Torrent already exists in client: ${existingTorrent.infoHash}`);
+      // If it's in client but not in activeTorrents, re-add it to the map
+      if (!activeTorrents.has(existingTorrent.infoHash)) {
+        console.log(`[RO^JO] Re-adding existing torrent to activeTorrents`);
+        const actualPath = path.join(downloadPath, existingTorrent.name);
+        activeTorrents.set(existingTorrent.infoHash, {
+          name: displayName || existingTorrent.name,
+          infoHash: existingTorrent.infoHash,
+          progress: existingTorrent.progress || 0,
+          speed: existingTorrent.downloadSpeed || 0,
+          peers: existingTorrent.numPeers || 0,
+          status: existingTorrent.done ? "completed" : "downloading",
+          path: actualPath,
+          addedAt: Date.now(),
+          downloaded: existingTorrent.downloaded || 0,
+          length: existingTorrent.length || 0,
+        });
+        return { ok: true, infoHash: existingTorrent.infoHash, name: displayName || existingTorrent.name };
+      } else {
+        console.log(`[RO^JO] Torrent already in activeTorrents, returning error`);
+        return { ok: false, error: "This torrent is already in your download list" };
+      }
+    }
+
     return new Promise((resolve) => {
       let responded = false;
       let torrent;
