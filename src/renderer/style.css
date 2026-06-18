@@ -884,6 +884,8 @@ html, body {
 #vpnModal .modal-content {
   width: 460px;
   padding: 18px 20px;
+  border: 2px solid #c0c0c0;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.1), 0 20px 60px rgba(0,0,0,0.5);
 }
 
 .modal-header {
