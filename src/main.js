@@ -104,9 +104,9 @@ function updateDockBadge() {
 
 async function createWindow() {
   win = new BrowserWindow({
-    width: 700,
+    width: 910,
     height: 500,
-    minWidth: 520,
+    minWidth: 680,
     minHeight: 480,
     frame: false,
     titleBarStyle: "hidden",
