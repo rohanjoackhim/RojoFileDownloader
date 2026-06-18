@@ -57,6 +57,7 @@ let win;
 let client;
 const activeTorrents = new Map();
 let isMinimized = false;
+let isQuitting = false;
 let restartStatsLoop = null; // called when window is recreated after being closed
 
 // Store last used download path
@@ -191,7 +192,7 @@ async function initWebTorrent() {
   async function statsLoop() {
     if (statsRunning) return;
     statsRunning = true;
-    while (client) {
+    while (client && !isQuitting) {
       const list = [];
       for (const t of client.torrents) {
         const entry = activeTorrents.get(t.infoHash);
@@ -863,11 +864,19 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (e) => {
+  isQuitting = true;
+  // Stop stats loop immediately
+  statsRunning = false;
+  
+  // Destroy WebTorrent client synchronously before quit
   if (client) {
-    client.destroy(() => {
+    try {
+      client.destroy();
       console.log("[RO^JO] WebTorrent destroyed");
-    });
+    } catch (err) {
+      console.error("[RO^JO] Error destroying WebTorrent:", err);
+    }
   }
 });
 
