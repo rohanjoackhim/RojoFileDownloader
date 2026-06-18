@@ -271,10 +271,10 @@ html, body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 8px 12px;
+  padding: 6px 10px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   transition: background 0.15s, border-color 0.15s;
   cursor: pointer;
 }
@@ -289,9 +289,9 @@ html, body {
 }
 
 .torrent-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
   background: var(--bg);
   display: flex;
   align-items: center;
@@ -306,7 +306,7 @@ html, body {
 
 .torrent-icon-text {
   position: absolute;
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 700;
   color: #22c55e;
   pointer-events: none;
@@ -319,18 +319,18 @@ html, body {
 
 .torrent-name {
   font-weight: 600;
-  font-size: 0.82rem;
+  font-size: 0.75rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 2px;
+  margin-bottom: 1px;
 }
 
 .torrent-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 0.72rem;
+  gap: 6px;
+  font-size: 0.68rem;
   color: var(--text-muted);
 }
 
