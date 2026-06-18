@@ -5,13 +5,13 @@
 }
 
 :root {
-  --bg: #080818;
-  --bg-card: #111122;
-  --bg-hover: #1a1a33;
-  --border: #1e1e3a;
-  --text: #ffffff;
-  --text-muted: #8888aa;
-  --text-dim: #555577;
+  --bg: #1e1e1e;
+  --bg-card: rgba(255,255,255,0.04);
+  --bg-hover: rgba(255,255,255,0.08);
+  --border: rgba(255,255,255,0.06);
+  --text: #f0f0f0;
+  --text-muted: #999999;
+  --text-dim: #666666;
   --accent: #ff4d8d;
   --accent-hover: #ff6b9f;
   --success: #22c55e;
@@ -36,6 +36,67 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  position: relative;
+}
+
+/* Geometric glassmorphism background */
+#app::before,
+#app::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#app::before {
+  width: 340px;
+  height: 340px;
+  top: 10%;
+  left: 15%;
+  background: rgba(255,255,255,0.03);
+  clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+  transform: rotate(-12deg);
+  backdrop-filter: blur(40px);
+  -webkit-backdrop-filter: blur(40px);
+}
+
+#app::after {
+  width: 260px;
+  height: 260px;
+  bottom: 15%;
+  right: 10%;
+  background: rgba(255,255,255,0.025);
+  clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+  transform: rotate(18deg);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+}
+
+/* Subtle warm/cool glow layers */
+.glow-warm,
+.glow-cool {
+  position: absolute;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.18;
+}
+
+.glow-warm {
+  width: 300px;
+  height: 300px;
+  bottom: -60px;
+  left: -60px;
+  background: radial-gradient(circle, #ff6b35 0%, transparent 70%);
+}
+
+.glow-cool {
+  width: 280px;
+  height: 280px;
+  top: -40px;
+  right: -40px;
+  background: radial-gradient(circle, #4facfe 0%, transparent 70%);
 }
 
 /* Custom Title Bar */
@@ -46,11 +107,13 @@ html, body {
   height: 32px;
   padding: 0 12px;
   padding-left: 76px;
-  background: #0d0d20;
-  border-bottom: 1px solid #1e1e3a;
+  background: rgba(255,255,255,0.03);
+  border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
   user-select: none;
   flex-shrink: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .title-bar-left {
@@ -96,12 +159,12 @@ html, body {
 }
 
 .title-bar-btn:hover {
-  background: #1a1a33;
+  background: var(--bg-hover);
   color: #ffffff;
 }
 
 .title-bar-close:hover {
-  background: #ff4d8d;
+  background: var(--accent);
   color: white;
 }
 
@@ -115,6 +178,8 @@ html, body {
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
   user-select: none;
+  position: relative;
+  z-index: 1;
 }
 
 .toolbar-left {
@@ -169,11 +234,11 @@ html, body {
 }
 .btn-primary:hover { background: #16a34a; }
 
-.btn-secondary:hover { background: #1a1a33; }
+.btn-secondary:hover { background: var(--bg-hover); }
 
 #btnSetDefault svg {
   fill: none;
-  stroke: #555577;
+  stroke: var(--text-dim);
 }
 #btnSetDefault.is-default svg {
   fill: #22c55e;
@@ -217,6 +282,7 @@ html, body {
   overflow-y: auto;
   padding: 16px;
   position: relative;
+  z-index: 1;
 }
 
 /* Drop zone */
@@ -574,6 +640,8 @@ html, body {
   font-size: 0.78rem;
   color: var(--text-muted);
   user-select: none;
+  position: relative;
+  z-index: 1;
 }
 
 .status-right {
@@ -1033,9 +1101,9 @@ html, body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1e1e3a;
+  background: rgba(255,255,255,0.08);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #2a2a55;
+  background: rgba(255,255,255,0.15);
 }
