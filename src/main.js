@@ -3,10 +3,10 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 
-// Import existing VPN module from parent project
+// Import VPN module from local copy
 let vpn;
 try {
-  vpn = require("../../electron/vpn/index.cjs");
+  vpn = require("../vpn/index.cjs");
   console.log("[RO^JO] VPN module loaded successfully");
 } catch (e) {
   console.warn("[RO^JO] VPN module not available:", e.message);
