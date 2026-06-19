@@ -1216,6 +1216,7 @@ async function handleAddMagnet(magnetUri) {
               fileList = buildFileList(t, displayName);
               if (!fileList) {
                 console.error(`[RO^JO] ${displayName || t.name}: t.files still empty after retry, skipping file picker`);
+                try { client.remove(t); } catch (e) {}
                 if (!responded) { responded = true; resolve({ ok: false, error: "Failed to read torrent file list" }); }
                 return;
               }
@@ -1314,6 +1315,12 @@ async function handleAddTorrentFile(buffer, downloadPath) {
 
     return new Promise((resolve) => {
       let responded = false;
+      const timeout = setTimeout(() => {
+        if (!responded) {
+          responded = true;
+          resolve({ ok: false, error: "Timed out waiting for torrent to be ready. The .torrent file may be corrupted." });
+        }
+      }, 30000);
       let torrent;
       try {
         torrent = client.add(buffer, {
@@ -1393,6 +1400,7 @@ async function handleAddTorrentFile(buffer, downloadPath) {
                 setTorrentThrottle(realInfoHash, EXTERNAL_DRIVE_DL_LIMIT, 0);
                 broadcast("show-toast", { message: `External drive throttled to ${(EXTERNAL_DRIVE_DL_LIMIT / 1024 / 1024).toFixed(1)} MB/s to prevent freezing`, type: "warning" });
               }
+              clearTimeout(timeout);
               if (!responded) { responded = true; resolve({ ok: true, infoHash: realInfoHash, name: realName }); }
             });
             return;
@@ -1406,23 +1414,28 @@ async function handleAddTorrentFile(buffer, downloadPath) {
               fileList = buildFileList(t, t.name);
               if (!fileList) {
                 console.error(`[RO^JO] ${t.name}: t.files still empty after retry in handleAddTorrentFile`);
+                try { client.remove(t); } catch (e) {}
                 if (!responded) { responded = true; resolve({ ok: false, error: "Failed to read torrent file list" }); }
                 return;
               }
               doShowFilePicker(t, fileList, t.name, downloadPath, null, torrentFilePath);
+              clearTimeout(timeout);
               if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: t.name, filePicker: true }); }
             }, 100);
             return;
           }
           doShowFilePicker(t, fileList, t.name, downloadPath, null, torrentFilePath);
+          clearTimeout(timeout);
           if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: t.name, filePicker: true }); }
         });
       } catch (err) {
+        clearTimeout(timeout);
         if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
         return;
       }
 
       torrent.on("error", (err) => {
+        clearTimeout(timeout);
         if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
       });
 
@@ -2388,8 +2401,6 @@ ipcMain.handle("confirm-file-selection", async (_evt, infoHash, selectedIndices)
 
     try {
       // 1. Remove temp torrent (destroy store to clean up temp files)
-      client.remove(pending.torrent, { destroyStore: true });
-
       // 2. Re-add with the real download path
       const onReady = (t) => {
         if (resolved) return;
@@ -2435,22 +2446,26 @@ ipcMain.handle("confirm-file-selection", async (_evt, infoHash, selectedIndices)
         resolve({ ok: true, infoHash, name: pending.displayName || t.name });
       };
 
-      if (pending.magnetUri) {
-        client.add(pending.magnetUri, {
-          path: pending.downloadPath,
-          announce: ROJO_CONFIG.announce,
-        }, onReady);
-      } else if (pending.torrentFilePath && fs.existsSync(pending.torrentFilePath)) {
-        const buf = fs.readFileSync(pending.torrentFilePath);
-        client.add(buf, {
-          path: pending.downloadPath,
-          announce: ROJO_CONFIG.announce,
-        }, onReady);
-      } else {
-        clearTimeout(timeout);
-        resolved = true;
-        resolve({ ok: false, error: "Cannot re-add torrent: no magnet URI or .torrent file found" });
-      }
+      client.remove(pending.torrent, { destroyStore: true }, () => {
+        if (pending.magnetUri) {
+          client.add(pending.magnetUri, {
+            path: pending.downloadPath,
+            announce: ROJO_CONFIG.announce,
+          }, onReady);
+        } else if (pending.torrentFilePath && fs.existsSync(pending.torrentFilePath)) {
+          const buf = fs.readFileSync(pending.torrentFilePath);
+          client.add(buf, {
+            path: pending.downloadPath,
+            announce: ROJO_CONFIG.announce,
+          }, onReady);
+        } else {
+          clearTimeout(timeout);
+          if (!resolved) {
+            resolved = true;
+            resolve({ ok: false, error: "Cannot re-add torrent: no magnet URI or .torrent file found" });
+          }
+        }
+      });
     } catch (e) {
       clearTimeout(timeout);
       if (!resolved) {
