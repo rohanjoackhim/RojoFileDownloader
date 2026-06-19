@@ -27,6 +27,9 @@
       "vpn/**/*",
       "node_modules/**/*"
     ],
+    "extraResources": [
+      "assets/icon.png"
+    ],
     "mac": {
       "category": "public.app-category.utilities",
       "target": [

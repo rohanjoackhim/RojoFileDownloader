@@ -7,6 +7,11 @@ let torrentOrder = []; // array of infoHashes in display order
 const torrentLogs = new Map(); // infoHash -> array of log lines
 const torrentElements = new Map(); // infoHash -> { el, refs }
 
+// Cached status for visibility-aware rendering
+let lastStatusLabel = "Ready";
+let lastStatusDown = "0 B/s";
+let lastStatusUp = "0 B/s";
+
 // SVG icon for torrent items (reused)
 const TORRENT_SVG = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`;
 
@@ -58,11 +63,75 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// Set app logo from correct asset path (avoids asar .. path issues)
+(async function loadLogo() {
+  try {
+    const logoPath = await rojoAPI.getAssetPath("icon.png");
+    if (logoPath) $("appLogo").src = logoPath;
+  } catch (e) {
+    console.error("[RO^JO] Failed to load logo:", e);
+  }
+})();
+
 // ---------- Detail Panel ----------
 
 // Cache last detail values to avoid redundant DOM updates
 let lastDetailHash = null;
 let lastDetail = {};
+let lastCoverName = null;
+const rendererCoverCache = new Map(); // torrentName -> imageUrl
+
+const rendererImdbCache = new Map();
+
+function showImdbBadge(imdb) {
+  const badge = $("detailImdb");
+  const ratingEl = $("detailImdbRating");
+  if (!imdb || !imdb.rating) {
+    badge.style.display = "none";
+    badge.href = "#";
+    return;
+  }
+  ratingEl.textContent = imdb.rating;
+  badge.href = `https://www.imdb.com/title/${imdb.id}/`;
+  badge.style.display = "inline-flex";
+}
+
+async function fetchAndShowCover(torrentName) {
+  if (!torrentName || lastCoverName === torrentName) return;
+  lastCoverName = torrentName;
+  const coverEl = $("detailCover");
+
+  // Check cache
+  if (rendererCoverCache.has(torrentName)) {
+    const url = rendererCoverCache.get(torrentName);
+    if (url) { coverEl.src = url; coverEl.style.display = "block"; }
+    else { coverEl.style.display = "none"; }
+    const imdb = rendererImdbCache.get(torrentName);
+    showImdbBadge(imdb || null);
+    return;
+  }
+
+  // Hide while loading
+  coverEl.style.display = "none";
+  coverEl.src = "";
+  $("detailImdb").style.display = "none";
+
+  try {
+    const result = await rojoAPI.fetchCoverArt(torrentName);
+    rendererCoverCache.set(torrentName, result.ok && result.url ? result.url : null);
+    rendererImdbCache.set(torrentName, result.ok && result.imdb ? result.imdb : null);
+    if (lastCoverName === torrentName) {
+      if (result.url) {
+        coverEl.src = result.url;
+        coverEl.style.display = "block";
+      }
+      showImdbBadge(result.imdb || null);
+    }
+  } catch (e) {
+    rendererCoverCache.set(torrentName, null);
+    rendererImdbCache.set(torrentName, null);
+  }
+}
 
 function updateDetailPanel(t) {
   if (!t) {
@@ -103,8 +172,38 @@ function updateDetailPanel(t) {
   if (changed("ratio", ratioText)) $("detailRatio").textContent = ratioText;
   if (changed("path", t.path)) $("detailPath").textContent = t.path || "--";
 
+  // Fetch cover art when torrent changes
+  if (lastDetailHash !== hash && t.name) {
+    fetchAndShowCover(t.name);
+  }
+
+  // Render file list
+  const fileList = t.fileList;
+  const filesEl = $("detailFiles");
+  const filesListEl = $("detailFilesList");
+  if (fileList && fileList.length > 0) {
+    filesEl.style.display = "block";
+    // Only rebuild if file list changed
+    const fileListKey = fileList.map(f => f.name + f.length).join("|");
+    if (changed("fileListKey", fileListKey)) {
+      filesListEl.innerHTML = "";
+      const isCompleted = t.status === "completed";
+      fileList.forEach((f) => {
+        const item = document.createElement("div");
+        item.className = "detail-file-item";
+        const check = isCompleted
+          ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+          : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" opacity="0.5"><circle cx="12" cy="12" r="10"/></svg>';
+        item.innerHTML = `${check}<span class="detail-file-name" title="${f.name}">${f.name}</span><span class="detail-file-size">${formatBytes(f.length || 0)}</span>`;
+        filesListEl.appendChild(item);
+      });
+    }
+  } else {
+    filesEl.style.display = "none";
+  }
+
   lastDetailHash = hash;
-  lastDetail = { name: t.name, size: sizeText, pct, fillClass, status: statusText, peers: peersText, down: downText, up: upText, eta: etaText, ratio: ratioText, path: t.path };
+  lastDetail = { name: t.name, size: sizeText, pct, fillClass, status: statusText, peers: peersText, down: downText, up: upText, eta: etaText, ratio: ratioText, path: t.path, fileListKey: fileList ? fileList.map(f => f.name + f.length).join("|") : "" };
 }
 
 // ---------- Torrent List Rendering ----------
@@ -171,13 +270,14 @@ function createTorrentElement(t) {
 }
 
 function updateTorrentElement(refs, t) {
+  const isHttp = t.type === "http";
   const pct = Math.round((t.progress || 0) * 100);
   const statusClass = t.status === "completed" ? "status-completed" :
                       t.status === "paused" ? "status-paused" : "status-downloading";
   const fillClass = t.status === "completed" ? "completed" : "";
 
   const sizeText = `${formatBytes(t.downloaded || 0)} / ${formatBytes(t.length || 0)}`;
-  const peersText = (t.peers || 0) + " peers";
+  const peersText = isHttp ? "HTTP" : ((t.peers || 0) + " peers");
   const speedText = formatSpeed(t.speed || 0);
   const etaText = formatEta(t.timeRemaining);
 
@@ -216,7 +316,12 @@ function updateTorrentElement(refs, t) {
       const btn = document.createElement("button");
       btn.className = "btn-small " + (isPaused ? "btn-resume" : "btn-pause");
       btn.textContent = isPaused ? "Resume" : "Pause";
-      btn.addEventListener("click", (e) => { e.stopPropagation(); isPaused ? resumeTorrent(hash) : pauseTorrent(hash); });
+      if (isHttp) {
+        const httpId = parseInt(hash.replace("http-", ""), 10);
+        btn.addEventListener("click", (e) => { e.stopPropagation(); isPaused ? resumeHttpDownload(httpId) : pauseHttpDownload(httpId); });
+      } else {
+        btn.addEventListener("click", (e) => { e.stopPropagation(); isPaused ? resumeTorrent(hash) : pauseTorrent(hash); });
+      }
       refs.actions.appendChild(btn);
     }
     const folderBtn = document.createElement("button");
@@ -229,13 +334,23 @@ function updateTorrentElement(refs, t) {
     const removeBtn = document.createElement("button");
     removeBtn.className = "btn-small btn-remove";
     removeBtn.textContent = "Remove";
-    removeBtn.addEventListener("click", (e) => { e.stopPropagation(); removeTorrent(hash); });
+    if (isHttp) {
+      const httpId = parseInt(hash.replace("http-", ""), 10);
+      removeBtn.addEventListener("click", (e) => { e.stopPropagation(); removeHttpDownload(httpId); });
+    } else {
+      removeBtn.addEventListener("click", (e) => { e.stopPropagation(); removeTorrent(hash); });
+    }
     refs.actions.appendChild(removeBtn);
 
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "btn-small btn-delete-files";
     deleteBtn.textContent = "Delete";
-    deleteBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteWithFiles(hash); });
+    if (isHttp) {
+      const httpId = parseInt(hash.replace("http-", ""), 10);
+      deleteBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteHttpDownload(httpId); });
+    } else {
+      deleteBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteWithFiles(hash); });
+    }
     refs.actions.appendChild(deleteBtn);
   }
 }
@@ -245,11 +360,14 @@ function renderTorrents() {
   const emptyEl = $("emptyState");
   const dropEl = $("dropZone");
 
-  if (!torrents.length) {
+  const allItems = [...torrents, ...httpDownloadsList];
+
+  if (!allItems.length) {
     listEl.style.display = "none";
     emptyEl.style.display = "block";
     dropEl.style.display = "block";
     $("detailPanel").style.display = "none";
+    $("rightPanelEmpty").style.display = "flex";
     // Clean up cached elements
     for (const [hash, { el }] of torrentElements) {
       if (el.parentNode) el.parentNode.removeChild(el);
@@ -262,11 +380,11 @@ function renderTorrents() {
   emptyEl.style.display = "none";
   dropEl.style.display = "none";
 
-  // Apply custom order
-  let displayTorrents = torrents;
+  // Apply custom order (torrents only; HTTP downloads append at end)
+  let displayTorrents = allItems;
   if (torrentOrder.length > 0) {
     const orderMap = new Map(torrentOrder.map((h, i) => [h, i]));
-    displayTorrents = [...torrents].sort((a, b) => {
+    displayTorrents = [...allItems].sort((a, b) => {
       const oa = orderMap.get(a.infoHash) ?? 9999;
       const ob = orderMap.get(b.infoHash) ?? 9999;
       return oa - ob;
@@ -276,7 +394,7 @@ function renderTorrents() {
   const currentHashes = new Set(displayTorrents.map(t => t.infoHash));
   const domHashes = new Set(torrentElements.keys());
 
-  // Remove elements for torrents no longer in list
+  // Remove elements for items no longer in list
   for (const hash of domHashes) {
     if (!currentHashes.has(hash)) {
       const { el } = torrentElements.get(hash);
@@ -296,93 +414,35 @@ function renderTorrents() {
     item.el.classList.toggle("selected", t.infoHash === selectedHash);
   }
 
-  // Re-order DOM to match display order (only when order changed)
-  for (const t of displayTorrents) {
-    const item = torrentElements.get(t.infoHash);
-    if (item.el.parentNode !== listEl || item.el.nextSibling !== (displayTorrents[displayTorrents.indexOf(t) + 1] ? torrentElements.get(displayTorrents[displayTorrents.indexOf(t) + 1].infoHash)?.el : null)) {
-      listEl.appendChild(item.el);
+  // Re-order DOM to match display order (only when order changed) — O(n)
+  let prevEl = null;
+  for (let i = 0; i < displayTorrents.length; i++) {
+    const item = torrentElements.get(displayTorrents[i].infoHash);
+    const expectedNext = prevEl ? prevEl.nextSibling : listEl.firstChild;
+    if (item.el !== expectedNext) {
+      listEl.insertBefore(item.el, expectedNext);
     }
+    prevEl = item.el;
   }
 
   // Update detail panel for selected torrent
   if (selectedHash) {
-    const t = torrents.find((x) => x.infoHash === selectedHash);
-    if (t) updateDetailPanel(t);
-    else { selectedHash = null; $("detailPanel").style.display = "none"; }
+    const t = allItems.find((x) => x.infoHash === selectedHash);
+    if (t) {
+      $("detailPanel").style.display = "block";
+      $("rightPanelEmpty").style.display = "none";
+      updateDetailPanel(t);
+    } else {
+      selectedHash = null;
+      $("detailPanel").style.display = "none";
+      $("rightPanelEmpty").style.display = "flex";
+    }
   }
 }
 
 // Fast incremental update: only update changed properties, never rebuild DOM
 function updateTorrentElements() {
-  const listEl = $("torrentList");
-  const emptyEl = $("emptyState");
-  const dropEl = $("dropZone");
-
-  if (!torrents.length) {
-    listEl.style.display = "none";
-    emptyEl.style.display = "block";
-    dropEl.style.display = "block";
-    $("detailPanel").style.display = "none";
-    for (const [hash, { el }] of torrentElements) {
-      if (el.parentNode) el.parentNode.removeChild(el);
-    }
-    torrentElements.clear();
-    return;
-  }
-
-  listEl.style.display = "flex";
-  emptyEl.style.display = "none";
-  dropEl.style.display = "none";
-
-  const displayTorrents = torrentOrder.length > 0
-    ? [...torrents].sort((a, b) => {
-        const oa = torrentOrder.indexOf(a.infoHash);
-        const ob = torrentOrder.indexOf(b.infoHash);
-        return (oa === -1 ? 9999 : oa) - (ob === -1 ? 9999 : ob);
-      })
-    : torrents;
-
-  const currentHashes = new Set(displayTorrents.map(t => t.infoHash));
-
-  const now = Date.now();
-  if (now - lastDeadCheck > 5000) {
-    lastDeadCheck = now;
-    for (const [hash, { el }] of [...torrentElements]) {
-      if (!currentHashes.has(hash) && el.parentNode) {
-        el.parentNode.removeChild(el);
-        torrentElements.delete(hash);
-      }
-    }
-  }
-
-  let needsAppend = false;
-  for (const t of displayTorrents) {
-    if (!torrentElements.has(t.infoHash)) {
-      needsAppend = true;
-      break;
-    }
-  }
-
-  if (needsAppend) {
-    const fragment = document.createDocumentFragment();
-    for (const t of displayTorrents) {
-      let item = torrentElements.get(t.infoHash);
-      if (!item) {
-        item = createTorrentElement(t);
-        torrentElements.set(t.infoHash, item);
-      }
-      updateTorrentElement(item.refs, t);
-      item.el.classList.toggle("selected", t.infoHash === selectedHash);
-      fragment.appendChild(item.el);
-    }
-    listEl.innerHTML = "";
-    listEl.appendChild(fragment);
-  } else {
-    for (const t of displayTorrents) {
-      const item = torrentElements.get(t.infoHash);
-      updateTorrentElement(item.refs, t);
-    }
-  }
+  renderTorrents();
 }
 
 function selectTorrent(infoHash) {
@@ -395,7 +455,14 @@ function selectTorrent(infoHash) {
   // Add selected class to new selection
   const curr = torrentElements.get(infoHash);
   if (curr) curr.el.classList.add("selected");
-  // Detail panel removed from click — too much space. Use context menu > Show Torrent Info instead.
+  // Show detail panel in left sidebar
+  const allItems = [...torrents, ...httpDownloadsList];
+  const t = allItems.find((x) => x.infoHash === infoHash);
+  if (t) {
+    $("detailPanel").style.display = "block";
+    $("rightPanelEmpty").style.display = "none";
+    updateDetailPanel(t);
+  }
 }
 
 // ---------- Actions ----------
@@ -466,9 +533,11 @@ function removeTorrentFromUI(infoHash) {
   }
   torrentElements.delete(infoHash);
   torrents = torrents.filter((t) => t.infoHash !== infoHash);
+  httpDownloadsList = httpDownloadsList.filter((t) => t.infoHash !== infoHash);
   if (selectedHash === infoHash) {
     selectedHash = null;
     $("detailPanel").style.display = "none";
+    $("rightPanelEmpty").style.display = "flex";
   }
 }
 
@@ -502,6 +571,26 @@ async function deleteWithFiles(infoHash) {
   }
 }
 
+async function secureDelete(infoHash) {
+  const t = torrents.find((x) => x.infoHash === infoHash);
+  if (!t) return;
+  if (!confirm(`SECURE DELETE "${t.name}"?\n\nAll downloaded files will be overwritten with random data before deletion. This makes recovery extremely difficult.\n\nThis cannot be undone.`)) return;
+
+  showToast(`Securely deleting "${t.name}"...`, "warning");
+  removeTorrentFromUI(infoHash);
+
+  try {
+    const result = await rojoAPI.secureDeleteTorrent(infoHash);
+    if (result.ok) {
+      showToast(result.message, "success");
+    } else {
+      showToast(result.error || "Secure delete failed", "error");
+    }
+  } catch (e) {
+    showToast("Secure delete failed", "error");
+  }
+}
+
 async function openFile() {
   try {
     const result = await rojoAPI.selectFile();
@@ -529,6 +618,208 @@ async function openTorrentFolder(infoHash) {
   const t = torrents.find((x) => x.infoHash === infoHash);
   if (!t || !t.path) return;
   await rojoAPI.openTorrentFolder(t.path);
+}
+
+// ---------- HTTP Downloads ----------
+let httpDownloadsList = [];
+
+function openUrlModal() {
+  $("urlModal").classList.add("show");
+  $("urlInput").value = "";
+  $("urlError").textContent = "";
+  $("urlInput").focus();
+}
+
+function closeUrlModal() {
+  $("urlModal").classList.remove("show");
+  $("urlError").textContent = "";
+}
+
+async function addUrlDownload() {
+  const url = $("urlInput").value.trim();
+  if (!url) { $("urlError").textContent = "Please enter a URL"; return; }
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    $("urlError").textContent = "URL must start with http:// or https://";
+    return;
+  }
+  $("urlError").textContent = "";
+  closeUrlModal();
+  try {
+    const res = await rojoAPI.startHttpDownload(url);
+    if (res.ok) {
+      showToast("Download started");
+    } else {
+      showToast(res.error || "Failed to start download", "error");
+    }
+  } catch (e) {
+    showToast(e.message || "Failed to start download", "error");
+  }
+}
+
+async function pauseHttpDownload(id) {
+  try {
+    await rojoAPI.pauseHttpDownload(id);
+  } catch (e) {}
+}
+
+async function resumeHttpDownload(id) {
+  try {
+    await rojoAPI.resumeHttpDownload(id);
+  } catch (e) {}
+}
+
+async function removeHttpDownload(id) {
+  if (!confirm("Remove this download?\n\nDownloaded files will remain on disk.")) return;
+  try {
+    await rojoAPI.removeHttpDownload(id, false);
+  } catch (e) {}
+}
+
+async function deleteHttpDownload(id) {
+  if (!confirm("Delete this download and all files?\n\nThis cannot be undone.")) return;
+  try {
+    await rojoAPI.removeHttpDownload(id, true);
+  } catch (e) {}
+}
+
+// ---------- Schedule ----------
+function openScheduleModal() {
+  $("scheduleModal").classList.add("show");
+  $("scheduleUrlInput").value = "";
+  $("scheduleError").textContent = "";
+  // Set default time to now + 1 hour
+  const d = new Date(Date.now() + 3600000);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  $("scheduleTime").value = d.toISOString().slice(0, 16);
+  renderScheduleList();
+}
+
+function closeScheduleModal() {
+  $("scheduleModal").classList.remove("show");
+  $("scheduleError").textContent = "";
+}
+
+async function confirmSchedule() {
+  const url = $("scheduleUrlInput").value.trim();
+  const timeStr = $("scheduleTime").value;
+  if (!url) { $("scheduleError").textContent = "Please enter a URL"; return; }
+  if (!timeStr) { $("scheduleError").textContent = "Please select a time"; return; }
+  const scheduledTime = new Date(timeStr).getTime();
+  if (isNaN(scheduledTime) || scheduledTime <= Date.now()) {
+    $("scheduleError").textContent = "Please select a future time";
+    return;
+  }
+  $("scheduleError").textContent = "";
+  try {
+    await rojoAPI.scheduleDownload(url, null, scheduledTime);
+    showToast("Download scheduled");
+    $("scheduleUrlInput").value = "";
+    renderScheduleList();
+  } catch (e) {
+    $("scheduleError").textContent = e.message || "Failed to schedule";
+  }
+}
+
+async function cancelScheduled(id) {
+  try {
+    await rojoAPI.cancelScheduledDownload(id);
+    renderScheduleList();
+  } catch (e) {}
+}
+
+function renderScheduleList() {
+  rojoAPI.getScheduledDownloads().then(items => {
+    const el = $("scheduleList");
+    el.innerHTML = "";
+    if (!items || !items.length) {
+      el.innerHTML = "<p style=\"font-size:0.75rem;color:var(--text-muted);\">No scheduled downloads</p>";
+      return;
+    }
+    items.forEach(item => {
+      const row = document.createElement("div");
+      row.className = "schedule-item";
+      const date = new Date(item.scheduledTime);
+      const timeStr = date.toLocaleString();
+      const name = item.url.split("/").pop() || "Download";
+      row.innerHTML = `<span class="schedule-name" title="${escapeHtml(item.url)}">${escapeHtml(name)}</span><span class="schedule-time">${timeStr}</span><button class="btn-small btn-remove" data-id="${item.id}">Cancel</button>`;
+      row.querySelector("button").addEventListener("click", () => cancelScheduled(item.id));
+      el.appendChild(row);
+    });
+  });
+}
+
+// ---------- History ----------
+
+async function openHistoryModal() {
+  $("historyModal").classList.add("show");
+  await renderHistoryList();
+}
+
+function closeHistoryModal() {
+  $("historyModal").classList.remove("show");
+}
+
+async function renderHistoryList() {
+  try {
+    const result = await rojoAPI.getTorrentHistory();
+    const history = result.ok && result.history ? result.history : [];
+    const el = $("historyList");
+    const emptyEl = $("historyEmpty");
+    el.innerHTML = "";
+
+    if (!history.length) {
+      el.style.display = "none";
+      emptyEl.style.display = "block";
+      return;
+    }
+
+    el.style.display = "block";
+    emptyEl.style.display = "none";
+
+    history.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "history-item";
+      const date = item.addedAt ? new Date(item.addedAt).toLocaleDateString() : "Unknown";
+      const name = escapeHtml(item.name || "Unknown");
+      row.innerHTML = `
+        <div class="history-info">
+          <div class="history-name" title="${name}">${name}</div>
+          <div class="history-date">${date}</div>
+        </div>
+        <div class="history-actions">
+          <button class="btn-small btn-primary" data-magnet="${escapeHtml(item.magnetUri || "")}">Add</button>
+        </div>
+      `;
+      const addBtn = row.querySelector("button");
+      addBtn.addEventListener("click", () => {
+        const magnet = addBtn.dataset.magnet;
+        if (magnet && magnet.startsWith("magnet:")) {
+          rojoAPI.addMagnet(magnet);
+          showToast(`Re-adding "${item.name}"`);
+          closeHistoryModal();
+        } else {
+          showToast("No magnet link available", "error");
+        }
+      });
+      el.appendChild(row);
+    });
+  } catch (e) {
+    $("historyList").innerHTML = "";
+    $("historyList").style.display = "none";
+    $("historyEmpty").style.display = "block";
+    $("historyEmpty").innerHTML = "<p>Failed to load history</p>";
+  }
+}
+
+async function clearHistory() {
+  if (!confirm("Clear all torrent history? This cannot be undone.")) return;
+  try {
+    await rojoAPI.clearTorrentHistory();
+    renderHistoryList();
+    showToast("History cleared");
+  } catch (e) {
+    showToast("Failed to clear history", "error");
+  }
 }
 
 // ---------- Window Controls ----------
@@ -642,6 +933,10 @@ $("btnSpeedTest").addEventListener("click", async () => {
   try {
     const result = await rojoAPI.speedTest();
     if (result.ok) {
+      // Persist results in status bar
+      $("speedTestResult").style.display = "flex";
+      $("speedDownResult").textContent = "D: " + result.downloadSpeedFormatted;
+      $("speedUpResult").textContent = "U: " + result.uploadSpeedFormatted;
       showToast(`Down: ${result.downloadSpeedFormatted} | Up: ${result.uploadSpeedFormatted} | Ping: ${result.ping}`);
     } else {
       showToast(`Speed test failed: ${result.error}`, "error");
@@ -654,48 +949,97 @@ $("btnSpeedTest").addEventListener("click", async () => {
   }
 });
 
+$("btnAddUrl").addEventListener("click", openUrlModal);
+$("btnConfirmUrl").addEventListener("click", addUrlDownload);
+$("btnCancelUrl").addEventListener("click", closeUrlModal);
+$("urlModal").querySelector(".modal-backdrop").addEventListener("click", closeUrlModal);
+$("urlInput").addEventListener("keydown", (e) => { if (e.key === "Enter") addUrlDownload(); });
+
+$("btnSchedule").addEventListener("click", openScheduleModal);
+$("btnConfirmSchedule").addEventListener("click", confirmSchedule);
+$("btnCancelSchedule").addEventListener("click", closeScheduleModal);
+$("scheduleModal").querySelector(".modal-backdrop").addEventListener("click", closeScheduleModal);
+
+$("btnHistory").addEventListener("click", openHistoryModal);
+$("btnCloseHistory").addEventListener("click", closeHistoryModal);
+$("btnClearHistory").addEventListener("click", clearHistory);
+$("historyModal").querySelector(".modal-backdrop").addEventListener("click", closeHistoryModal);
+
 // ---------- File Picker ----------
 
 let pendingFilePickerInfoHash = null;
+let pendingFilePickerAllSelected = true;
 
 function showFilePickerModal(data) {
   pendingFilePickerInfoHash = data.infoHash;
-  $("filePickerTitle").textContent = `Select Files — ${data.name}`;
-  $("filePickerHint").textContent = `${data.fileList.length} files available`;
+  pendingFilePickerAllSelected = true;
+
+  $("filePickerTitle").textContent = data.name || "Select Files";
+  $("btnToggleAllFiles").textContent = "Deselect All";
+
+  const totalBytes = data.fileList.reduce((sum, f) => sum + (f.length || 0), 0);
+  $("filePickerHint").textContent = `${data.fileList.length} file${data.fileList.length !== 1 ? "s" : ""} · ${formatBytes(totalBytes)} total`;
 
   const listEl = $("filePickerList");
   listEl.innerHTML = "";
 
   data.fileList.forEach((file) => {
+    const displayName = (file.name && String(file.name).trim()) || (file.path && String(file.path).trim()) || `File ${file.index + 1}`;
+    const isRisky = data.scanResults && data.scanResults.riskyFiles && data.scanResults.riskyFiles.includes(file.name);
+
     const item = document.createElement("label");
-    item.className = "file-picker-item";
+    item.className = "file-picker-item" + (isRisky ? " file-picker-item--risky" : "");
+    item.title = displayName + (isRisky ? " (FLAGGED: potential malware)" : "");
 
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
-    checkbox.checked = true;
-    checkbox.dataset.index = file.index;
-    checkbox.className = "file-picker-checkbox";
+    checkbox.checked = !isRisky;
+    checkbox.dataset.index = String(file.index);
 
-    const info = document.createElement("div");
-    info.className = "file-picker-info";
+    const row = document.createElement("div");
+    row.className = "file-picker-row";
 
     const nameEl = document.createElement("span");
-    nameEl.className = "file-picker-name";
-    nameEl.textContent = file.name;
+    nameEl.className = "fp-name";
+    nameEl.textContent = displayName;
 
     const sizeEl = document.createElement("span");
-    sizeEl.className = "file-picker-size";
-    sizeEl.textContent = formatBytes(file.length);
+    sizeEl.className = "fp-size";
+    sizeEl.textContent = formatBytes(file.length || 0);
 
-    info.appendChild(nameEl);
-    info.appendChild(sizeEl);
+    row.appendChild(nameEl);
+    row.appendChild(sizeEl);
     item.appendChild(checkbox);
-    item.appendChild(info);
+    item.appendChild(row);
     listEl.appendChild(item);
   });
 
+  // Show malware scan warning banner
+  const warningEl = $("filePickerScanWarning");
+  const warningListEl = $("filePickerScanList");
+  if (data.scanResults && !data.scanResults.safe && data.scanResults.warnings.length > 0) {
+    warningListEl.innerHTML = "";
+    data.scanResults.warnings.forEach((w) => {
+      const li = document.createElement("li");
+      li.textContent = w;
+      warningListEl.appendChild(li);
+    });
+    warningEl.style.display = "block";
+  } else {
+    warningEl.style.display = "none";
+    warningListEl.innerHTML = "";
+  }
+
   $("filePickerModal").classList.add("show");
 }
+
+// Select / Deselect All
+$("btnToggleAllFiles").addEventListener("click", () => {
+  pendingFilePickerAllSelected = !pendingFilePickerAllSelected;
+  $("btnToggleAllFiles").textContent = pendingFilePickerAllSelected ? "Deselect All" : "Select All";
+  const boxes = $("filePickerList").querySelectorAll('input[type="checkbox"]');
+  boxes.forEach((cb) => { cb.checked = pendingFilePickerAllSelected; });
+});
 
 function hideFilePickerModal() {
   $("filePickerModal").classList.remove("show");
@@ -711,7 +1055,7 @@ $("btnCancelFilePicker").addEventListener("click", async () => {
 
 $("btnConfirmFilePicker").addEventListener("click", async () => {
   if (!pendingFilePickerInfoHash) return;
-  const checkboxes = $("filePickerList").querySelectorAll(".file-picker-checkbox");
+  const checkboxes = $("filePickerList").querySelectorAll('input[type="checkbox"]');
   const selectedIndices = [];
   checkboxes.forEach((cb) => {
     if (cb.checked) selectedIndices.push(parseInt(cb.dataset.index));
@@ -733,9 +1077,17 @@ rojoAPI.onShowFilePicker((data) => {
   showFilePickerModal(data);
 });
 
+rojoAPI.onShowToast((data) => {
+  showToast(data.message, data.type || "success");
+});
+
 function updateDefaultStar(isDefault) {
   $("btnSetDefault").classList.toggle("is-default", isDefault);
 }
+
+$("btnBackground").addEventListener("click", async () => {
+  await rojoAPI.minimizeToTray();
+});
 
 $("btnSetDefault").addEventListener("click", async () => {
   try {
@@ -754,6 +1106,16 @@ $("btnSetDefault").addEventListener("click", async () => {
 
 // Close modal on backdrop click
 $("magnetModal").querySelector(".modal-backdrop").addEventListener("click", closeModal);
+
+// Render cached state when window becomes visible
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && torrents.length) {
+    $("statusText").textContent = lastStatusLabel;
+    $("downSpeed").textContent = lastStatusDown;
+    $("upSpeed").textContent = lastStatusUp;
+    updateTorrentElements();
+  }
+});
 
 // ---------- Context Menu ----------
 
@@ -883,6 +1245,20 @@ async function recheckTorrent(infoHash) {
   }
 }
 
+// Update Tracker (reannounce)
+async function updateTracker(infoHash) {
+  try {
+    const result = await rojoAPI.updateTracker(infoHash);
+    if (result.ok) {
+      showToast("Tracker updated — reannouncing…");
+    } else {
+      showToast(result.error || "Failed to update tracker", "error");
+    }
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+}
+
 // Context menu item clicks
 $("contextMenu").addEventListener("click", (e) => {
   const item = e.target.closest(".ctx-item");
@@ -894,20 +1270,15 @@ $("contextMenu").addEventListener("click", (e) => {
   if (action === "copy-magnet") copyMagnetUri(hash);
   else if (action === "limit-dl") showSubmenu("subDlSpeed", item);
   else if (action === "limit-ul") showSubmenu("subUlSpeed", item);
-  else if (action === "move-top") moveTorrent(hash, "top");
   else if (action === "move-up") moveTorrent(hash, "up");
   else if (action === "move-down") moveTorrent(hash, "down");
-  else if (action === "move-bottom") moveTorrent(hash, "bottom");
   else if (action === "recheck") recheckTorrent(hash);
-  else if (action === "update-tracker") showToast("Update tracker: not yet implemented", "error");
+  else if (action === "update-tracker") updateTracker(hash);
   else if (action === "relocate") showToast("Relocate: not yet implemented", "error");
-  else if (action === "show-info") { selectTorrent(hash); }
   else if (action === "stop-ratio") showSubmenu("subRatio", item);
-  else if (action === "show-log") showTorrentLog(hash);
-  else if (action === "show-finder") openTorrentFolder(hash);
-  else if (action === "quick-look") quickLookTorrent(hash);
   else if (action === "delete-task") removeTorrent(hash);
   else if (action === "delete-files") deleteWithFiles(hash);
+  else if (action === "secure-delete") secureDelete(hash);
 
   // Submenu selections
   if (item.dataset.dl !== undefined) setDlLimit(hash, parseInt(item.dataset.dl));
@@ -933,12 +1304,18 @@ let contextMenuOpen = false;
 let lastDeadCheck = 0;
 rojoAPI.onTorrentsUpdated((data) => {
   torrents = data.torrents || [];
-  const count = torrents.length;
+  const allItems = [...torrents, ...httpDownloadsList];
+  const count = allItems.length;
   const label = count === 1 ? "1 transfer" : count + " transfers";
   const down = formatSpeed(data.downloadSpeed);
   const up = formatSpeed(data.uploadSpeed);
 
-  if (!renderPending) {
+  // Cache latest values even if hidden — render on next visibility
+  lastStatusLabel = label;
+  lastStatusDown = down;
+  lastStatusUp = up;
+
+  if (!renderPending && document.visibilityState !== "hidden") {
     renderPending = true;
     requestAnimationFrame(() => {
       renderPending = false;
@@ -952,10 +1329,54 @@ rojoAPI.onTorrentsUpdated((data) => {
   }
 });
 
-rojoAPI.onTorrentCompleted((data) => {
+rojoAPI.onHttpDownloadsUpdated((list) => {
+  httpDownloadsList = list.map(d => ({ ...d, infoHash: `http-${d.id}`, type: "http" }));
+  const allItems = [...torrents, ...httpDownloadsList];
+  const count = allItems.length;
+  const label = count === 1 ? "1 transfer" : count + " transfers";
+  $("statusText").textContent = label;
+  if (!renderPending && document.visibilityState !== "hidden") {
+    renderPending = true;
+    requestAnimationFrame(() => {
+      renderPending = false;
+      if (!contextMenuOpen) updateTorrentElements();
+    });
+  }
+});
+
+rojoAPI.onHttpDownloadRemoved((data) => {
+  removeTorrentFromUI(`http-${data.id}`);
+});
+
+rojoAPI.onScheduledDownloadsUpdated((list) => {
+  // Refresh schedule list if modal is open
+  if ($("scheduleModal").classList.contains("show")) {
+    renderScheduleList();
+  }
+});
+
+rojoAPI.onTorrentCompleted(async (data) => {
   showToast(`Completed: ${data.name}`);
   if (!torrentLogs.has(data.infoHash)) torrentLogs.set(data.infoHash, []);
   torrentLogs.get(data.infoHash).push(`[${new Date().toLocaleTimeString()}] COMPLETED`);
+
+  // Post-download malware scan with ClamAV
+  if (data.path) {
+    try {
+      const result = await rojoAPI.scanDownloadedFile(data.path);
+      if (result.ok) {
+        if (result.clean) {
+          showToast(`Scan clean: ${data.name}`, "success");
+        } else {
+          showToast(`THREAT DETECTED in ${data.name}: ${result.message}`, "error");
+        }
+      } else {
+        console.log(`[RO^JO] Scan skipped: ${result.error}`);
+      }
+    } catch (e) {
+      console.error("[RO^JO] Post-download scan error:", e);
+    }
+  }
 });
 
 rojoAPI.onTorrentError((msg) => {
@@ -996,6 +1417,29 @@ async function refreshVpnStatus() {
     updateVpnUI(status);
   } catch (e) {
     console.warn("[VPN] status error:", e.message);
+  }
+}
+
+function updateInternetUI(isOnline) {
+  const el = $("internetStatus");
+  const dot = $("internetDot");
+  const label = $("internetLabel");
+  if (isOnline) {
+    el.classList.add("online");
+    label.textContent = "Online";
+  } else {
+    el.classList.remove("online");
+    label.textContent = "Offline";
+  }
+}
+
+async function checkInternet() {
+  try {
+    const result = await rojoAPI.checkInternet();
+    updateInternetUI(result.ok);
+  } catch (e) {
+    updateInternetUI(false);
+    console.warn("[Internet] check error:", e.message);
   }
 }
 
@@ -1098,6 +1542,9 @@ async function testVpn() {
 // Poll VPN status every 5 seconds
 setInterval(refreshVpnStatus, 5000);
 
+// Check internet connectivity every 10 seconds
+setInterval(checkInternet, 10000);
+
 // ---------- Event Wiring ----------
 
 $("btnVpnToggle").addEventListener("click", openVpnModal);
@@ -1134,4 +1581,5 @@ $("btnVpnImport").addEventListener("click", async () => {
   }
   updateTorrentElements();
   refreshVpnStatus();
+  checkInternet();
 })();

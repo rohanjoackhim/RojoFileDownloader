@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:;">
   <title>RO/JO</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -29,82 +29,127 @@
 
     <header class="toolbar">
       <div class="toolbar-left">
-        <img src="../../assets/icon.png" alt="Rojo" class="app-logo" />
+        <img src="" alt="Rojo" class="app-logo" id="appLogo" />
         <span class="app-tagline">Small but mighty</span>
       </div>
       <div class="toolbar-actions">
-        <button class="btn btn-primary" id="btnAddMagnet">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+        <button class="btn btn-primary" id="btnAddMagnet" title="Add magnet link (⌘+M)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
           <span>Add Magnet</span>
         </button>
-        <button class="btn btn-secondary" id="btnOpenFile">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+        <button class="btn btn-secondary" id="btnOpenFile" title="Open .torrent file (⌘+O)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
           <span>Open File</span>
         </button>
-        <button class="btn btn-secondary" id="btnSpeedTest">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-          <span>Speed Test</span>
+        <button class="btn btn-secondary" id="btnAddUrl" title="Add torrent from URL (⌘+U)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          <span>Add URL</span>
         </button>
-        <button class="btn btn-vpn" id="btnVpnToggle">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <button class="btn btn-secondary" id="btnSchedule" title="Schedule downloads">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span>Schedule</span>
+        </button>
+        <button class="btn btn-vpn" id="btnVpnToggle" title="Toggle WireGuard VPN">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
           <span>VPN</span>
         </button>
-        <button class="btn btn-secondary" id="btnSetDefault">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        <button class="btn btn-secondary" id="btnBackground" title="Run in background (menu bar)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <span>Background</span>
+        </button>
+        <button class="btn btn-secondary" id="btnSetDefault" title="Set as default torrent client">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           <span>Default</span>
+        </button>
+        <button class="btn btn-secondary" id="btnHistory" title="Torrent history">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span>History</span>
         </button>
       </div>
     </header>
 
     <main class="content">
-      <div id="dropZone" class="drop-zone">
-        <div class="drop-zone-content">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <p>Drag & drop a .torrent file or magnet link here</p>
-        </div>
-      </div>
-
-      <div id="torrentList" class="torrent-list"></div>
-
-      <div id="emptyState" class="empty-state">
-        <p>No torrents yet</p>
-        <p class="hint">Add a magnet link or open a .torrent file to start downloading</p>
-      </div>
-
-      <!-- Detail Panel for selected torrent -->
-      <div id="detailPanel" class="detail-panel" style="display:none;">
-        <div class="detail-header">
-          <div class="detail-name" id="detailName">--</div>
-          <div class="detail-size" id="detailSize">--</div>
-        </div>
-        <div class="detail-bar-wrap">
-          <div class="battery-bar">
-            <div class="battery-body">
-              <div class="battery-fill" id="batteryFill" style="width:0%"></div>
-            </div>
-            <div class="battery-cap"></div>
+      <!-- Left Panel: Torrent List -->
+      <div class="left-panel">
+        <div id="dropZone" class="drop-zone">
+          <div class="drop-zone-content">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <p>Drag & drop a .torrent file or magnet link here</p>
           </div>
-          <span class="detail-pct" id="detailPct">0%</span>
         </div>
-        <div class="detail-status" id="detailStatus">--</div>
-        <div class="detail-meta">
-          <span id="detailPeers">0 peers</span>
-          <span id="detailDown">0 B/s</span>
-          <span id="detailUp">0 B/s</span>
-          <span id="detailEta">--</span>
-          <span id="detailRatio">Ratio: 0.00</span>
+
+        <div id="torrentList" class="torrent-list"></div>
+
+        <div id="emptyState" class="empty-state">
+          <p>No torrents yet</p>
+          <p class="hint">Add a magnet link or open a .torrent file to start downloading</p>
         </div>
-        <div class="detail-path" id="detailPath">--</div>
+      </div>
+
+      <!-- Right Panel: Torrent Info -->
+      <div class="right-panel">
+        <div id="detailPanel" class="detail-panel" style="display:none;">
+          <div class="detail-top-row">
+            <img id="detailCover" class="detail-cover" src="" alt="" style="display:none;" />
+            <div class="detail-header">
+              <div class="detail-name" id="detailName">--</div>
+              <div class="detail-size" id="detailSize">--</div>
+              <a id="detailImdb" class="detail-imdb" href="#" target="_blank" style="display:none;">
+                <span class="imdb-logo">IMDb</span>
+                <span class="imdb-rating" id="detailImdbRating">--</span>
+              </a>
+            </div>
+          </div>
+          <div class="detail-bar-wrap">
+            <div class="battery-bar">
+              <div class="battery-body">
+                <div class="battery-fill" id="batteryFill" style="width:0%"></div>
+              </div>
+              <div class="battery-cap"></div>
+            </div>
+            <span class="detail-pct" id="detailPct">0%</span>
+          </div>
+          <div class="detail-status" id="detailStatus">--</div>
+          <div class="detail-meta">
+            <span id="detailPeers">0 peers</span>
+            <span id="detailDown">0 B/s</span>
+            <span id="detailUp">0 B/s</span>
+            <span id="detailEta">--</span>
+            <span id="detailRatio">Ratio: 0.00</span>
+          </div>
+          <div class="detail-path" id="detailPath">--</div>
+          <div class="detail-files" id="detailFiles" style="display:none;">
+            <div class="detail-files-title">Files</div>
+            <div class="detail-files-list" id="detailFilesList"></div>
+          </div>
+        </div>
+        <div id="rightPanelEmpty" class="right-panel-empty">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+          <p>Select a torrent to view details</p>
+        </div>
       </div>
     </main>
 
     <footer class="status-bar">
       <div class="status-left">
         <span id="statusText">Ready</span>
+        <span class="internet-status" id="internetStatus" title="Internet connectivity">
+          <span class="internet-dot" id="internetDot"></span>
+          <span id="internetLabel">Offline</span>
+        </span>
+        <button class="status-btn" id="btnSpeedTest" title="Run internet speed test">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          <span>Speed Test</span>
+        </button>
         <span class="vpn-status" id="vpnStatus" style="display:none;">
           <span class="vpn-dot"></span>
           <span id="vpnLabel">VPN</span>
         </span>
+      </div>
+      <div class="status-center" id="speedTestResult" style="display:none;" title="Last speed test result">
+        <span class="speed-down" id="speedDownResult">--</span>
+        <span class="speed-sep">|</span>
+        <span class="speed-up" id="speedUpResult">--</span>
       </div>
       <div class="status-right">
         <span id="downSpeed">0 B/s</span>
@@ -122,13 +167,13 @@
         <h3>WireGuard VPN</h3>
         <button class="modal-close" id="btnVpnClose">&times;</button>
       </div>
-      <p class="modal-hint">Paste your WireGuard config below or import a <span class="code-tag">.conf</span> file. By default all traffic uses the VPN (full tunnel). Use split-tunnel only if your provider supports it.</p>
-      <button class="btn btn-import" id="btnVpnImport">Import .conf file</button>
-      <textarea id="vpnConfigInput" rows="10" placeholder="[Interface]\nAddress = 10.0.0.2/24\nDNS = 1.1.1.1,8.8.8.8\nPrivateKey = ...\n\n[Peer]\nPublicKey=...\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = vpn.example.com:51820\nPersistentKeepalive = 25"></textarea>
+      <p class="modal-hint">Paste config or import a <span class="code-tag">.conf</span> file.</p>
+      <button class="btn btn-import" id="btnVpnImport">Import .conf</button>
+      <textarea id="vpnConfigInput" rows="6" placeholder="[Interface]...\n\n[Peer]..."></textarea>
       <div class="vpn-split-section">
-        <label for="vpnSplitTunnel">Split-tunnel hosts (optional)</label>
-        <input type="text" id="vpnSplitTunnel" placeholder="bttpxnzcop.top, provider.com" />
-        <p class="vpn-warning">Only route traffic to these hostnames through the VPN. Leave blank for full tunnel.<span class="warn-bold">Warning:</span> Some providers use dynamic redirects that split tunneling cannot follow. If streams fail, clear this field.</p>
+        <label for="vpnSplitTunnel">Split-tunnel hosts</label>
+        <input type="text" id="vpnSplitTunnel" placeholder="host1.com, host2.com" />
+        <p class="vpn-warning">Leave blank for full tunnel.</p>
       </div>
       <div id="vpnError" class="error-msg"></div>
       <div id="vpnSuccess" class="success-msg"></div>
@@ -158,12 +203,69 @@
   <div id="filePickerModal" class="modal">
     <div class="modal-backdrop"></div>
     <div class="modal-content modal-content--wide">
-      <h3 id="filePickerTitle">Select Files to Download</h3>
-      <p class="modal-hint" id="filePickerHint">Check the files you want to download</p>
+      <div class="file-picker-header">
+        <h3 id="filePickerTitle">Select Files</h3>
+        <button class="btn btn-text" id="btnToggleAllFiles">Select All</button>
+      </div>
+      <p class="modal-hint" id="filePickerHint">0 files</p>
+      <div id="filePickerScanWarning" class="file-picker-scan-warning" style="display:none;">
+        <div class="scan-warning-title">⚠️ Security Warning</div>
+        <ul id="filePickerScanList" class="scan-warning-list"></ul>
+      </div>
       <div id="filePickerList" class="file-picker-list"></div>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="btnCancelFilePicker">Cancel</button>
         <button class="btn btn-primary" id="btnConfirmFilePicker">Download Selected</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- URL Download Modal -->
+  <div id="urlModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <h3>Download from URL</h3>
+      <input type="text" id="urlInput" placeholder="https://example.com/file.zip" autofocus>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btnCancelUrl">Cancel</button>
+        <button class="btn btn-primary" id="btnConfirmUrl">Download</button>
+      </div>
+      <div id="urlError" class="error-msg"></div>
+    </div>
+  </div>
+
+  <!-- Schedule Modal -->
+  <div id="scheduleModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <h3>Schedule Download</h3>
+      <input type="text" id="scheduleUrlInput" placeholder="https://example.com/file.zip">
+      <label for="scheduleTime" style="display:block;font-size:0.75rem;color:var(--text-muted);margin:8px 0 4px;">Start at</label>
+      <input type="datetime-local" id="scheduleTime">
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btnCancelSchedule">Cancel</button>
+        <button class="btn btn-primary" id="btnConfirmSchedule">Schedule</button>
+      </div>
+      <div id="scheduleError" class="error-msg"></div>
+      <h4 style="font-size:0.8rem;margin-top:12px;margin-bottom:6px;">Pending</h4>
+      <div id="scheduleList" class="schedule-list"></div>
+    </div>
+  </div>
+
+  <!-- History Modal -->
+  <div id="historyModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-wide" style="max-width:520px;">
+      <div class="modal-header-row">
+        <h3>Torrent History</h3>
+        <button class="btn btn-small btn-danger" id="btnClearHistory">Clear All</button>
+      </div>
+      <div id="historyList" class="history-list"></div>
+      <div id="historyEmpty" class="history-empty" style="display:none;">
+        <p>No torrents in history yet.</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btnCloseHistory">Close</button>
       </div>
     </div>
   </div>
@@ -191,15 +293,12 @@
       <div class="ctx-item" data-ul="10485760">10 MB/s</div>
     </div>
     <div class="ctx-sep"></div>
-    <div class="ctx-item" data-action="move-top">Move to Top</div>
     <div class="ctx-item" data-action="move-up">Move Up</div>
     <div class="ctx-item" data-action="move-down">Move Down</div>
-    <div class="ctx-item" data-action="move-bottom">Move to Bottom</div>
     <div class="ctx-sep"></div>
     <div class="ctx-item" data-action="recheck">Force Re-Check</div>
     <div class="ctx-item" data-action="update-tracker">Update Tracker</div>
     <div class="ctx-item" data-action="relocate">Relocate</div>
-    <div class="ctx-item" data-action="show-info">Show Torrent Info</div>
     <div class="ctx-item ctx-has-sub" data-action="stop-ratio">Stop Seeding at Ratio</div>
     <div class="ctx-submenu" id="subRatio">
       <div class="ctx-item" data-ratio="0">Never</div>
@@ -208,12 +307,11 @@
       <div class="ctx-item" data-ratio="1.5">1.5</div>
       <div class="ctx-item" data-ratio="2.0">2.0</div>
     </div>
-    <div class="ctx-item" data-action="show-log">Show Message Log</div>
-    <div class="ctx-item" data-action="show-finder">Show in Finder</div>
-    <div class="ctx-item" data-action="quick-look">Quick Look</div>
     <div class="ctx-sep"></div>
     <div class="ctx-item ctx-danger" data-action="delete-task">Delete Task</div>
     <div class="ctx-item ctx-danger" data-action="delete-files">Delete with Files</div>
+    <div class="ctx-item ctx-danger" data-action="secure-delete" title="Overwrites files 3 times with random data before deletion. Recovery is extremely difficult.">Secure Delete</div>
+    <div class="ctx-hint">Files overwritten 3 times with random data before deletion</div>
   </div>
 
   <!-- Torrent Log Modal -->
