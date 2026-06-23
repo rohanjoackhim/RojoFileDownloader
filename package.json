@@ -1,6 +1,6 @@
 {
   "name": "rojo",
-  "productName": "RO/JO",
+  "productName": "RO^JO File Downloader",
   "version": "1.0.0",
   "description": "Fast, minimal BitTorrent client",
   "main": "src/main.js",
@@ -28,7 +28,9 @@
       "node_modules/**/*"
     ],
     "extraResources": [
-      "assets/icon.png"
+      "assets/icon.png",
+      "assets/logo.png",
+      "assets/tray-icon.png"
     ],
     "mac": {
       "category": "public.app-category.utilities",
@@ -41,7 +43,31 @@
           ]
         }
       ],
-      "icon": "assets/icon.icns"
+      "icon": "assets/icon.icns",
+      "mergeASARs": false,
+      "extendInfo": {
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeExtensions": ["torrent"],
+            "CFBundleTypeIconFile": "icon.icns",
+            "CFBundleTypeName": "Torrent File",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Default",
+            "LSItemContentTypes": ["org.bittorrent.torrent"]
+          }
+        ],
+        "UTImportedTypeDeclarations": [
+          {
+            "UTTypeIdentifier": "org.bittorrent.torrent",
+            "UTTypeDescription": "Torrent File",
+            "UTTypeIconFile": "icon.icns",
+            "UTTypeConformsTo": ["public.data"],
+            "UTTypeTagSpecification": {
+              "public.filename-extension": ["torrent"]
+            }
+          }
+        ]
+      }
     },
     "win": {
       "target": [
@@ -59,13 +85,6 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     },
-    "fileAssociations": [
-      {
-        "ext": "torrent",
-        "name": "Torrent File",
-        "role": "Editor"
-      }
-    ],
     "protocols": [
       {
         "name": "BitTorrent Magnet Link",
@@ -76,6 +95,8 @@
     ]
   },
   "dependencies": {
+    "basic-ftp": "^6.0.1",
+    "ssh2": "^1.17.0",
     "webtorrent": "^2.4.29"
   },
   "devDependencies": {

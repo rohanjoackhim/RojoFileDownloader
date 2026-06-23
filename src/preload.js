@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld("rojoAPI", {
   secureDeleteTorrent: (infoHash) => ipcRenderer.invoke("secure-delete-torrent", infoHash),
   getTorrentHistory: () => ipcRenderer.invoke("get-torrent-history"),
   clearTorrentHistory: () => ipcRenderer.invoke("clear-torrent-history"),
+  deleteHistoryEntry: (index) => ipcRenderer.invoke("delete-history-entry", index),
   pauseTorrent: (infoHash) => ipcRenderer.invoke("pause-torrent", infoHash),
   resumeTorrent: (infoHash) => ipcRenderer.invoke("resume-torrent", infoHash),
 
@@ -26,7 +27,14 @@ contextBridge.exposeInMainWorld("rojoAPI", {
   selectConfFile: () => ipcRenderer.invoke("select-conf-file"),
   getDownloadPath: () => ipcRenderer.invoke("get-download-path"),
   setAsDefault: () => ipcRenderer.invoke("set-as-default"),
+  removeAsDefault: () => ipcRenderer.invoke("remove-as-default"),
   checkIsDefault: () => ipcRenderer.invoke("check-is-default"),
+  splashClose: () => ipcRenderer.invoke("splash-close"),
+
+  // Torrent port
+  getTorrentPort: () => ipcRenderer.invoke("get-torrent-port"),
+  setTorrentPort: (port) => ipcRenderer.invoke("set-torrent-port", port),
+  checkPort: () => ipcRenderer.invoke("check-port"),
 
   // Context menu actions
   getMagnetUri: (infoHash) => ipcRenderer.invoke("get-magnet-uri", infoHash),
@@ -52,16 +60,36 @@ contextBridge.exposeInMainWorld("rojoAPI", {
   checkInternet: () => ipcRenderer.invoke("check-internet"),
 
   // HTTP downloads
-  startHttpDownload: (url, targetPath) => ipcRenderer.invoke("start-http-download", url, targetPath),
+  startHttpDownload: (url, targetPath, threads) => ipcRenderer.invoke("start-http-download", url, targetPath, threads),
   pauseHttpDownload: (id) => ipcRenderer.invoke("pause-http-download", id),
   resumeHttpDownload: (id) => ipcRenderer.invoke("resume-http-download", id),
   removeHttpDownload: (id, deleteFiles) => ipcRenderer.invoke("remove-http-download", id, deleteFiles),
   getHttpDownloads: () => ipcRenderer.invoke("get-http-downloads"),
 
   // Scheduling
-  scheduleDownload: (url, targetPath, scheduledTime) => ipcRenderer.invoke("schedule-download", url, targetPath, scheduledTime),
+  scheduleDownload: (url, targetPath, scheduledTime, shutdownAfterComplete) => ipcRenderer.invoke("schedule-download", url, targetPath, scheduledTime, shutdownAfterComplete),
   cancelScheduledDownload: (id) => ipcRenderer.invoke("cancel-scheduled-download", id),
   getScheduledDownloads: () => ipcRenderer.invoke("get-scheduled-downloads"),
+
+  // FTP
+  ftpConnect: (host, port, user, pass, mode) => ipcRenderer.invoke("ftp-connect", host, port, user, pass, mode),
+  ftpDisconnect: () => ipcRenderer.invoke("ftp-disconnect"),
+  ftpListLocal: (dirPath) => ipcRenderer.invoke("ftp-list-local", dirPath),
+  ftpListRemote: (dirPath) => ipcRenderer.invoke("ftp-list-remote", dirPath),
+  ftpUpload: (localPath, remotePath) => ipcRenderer.invoke("ftp-upload", localPath, remotePath),
+  ftpDownload: (remotePath, localPath) => ipcRenderer.invoke("ftp-download", remotePath, localPath),
+  ftpSaveCreds: (host, port, user, pass, mode) => ipcRenderer.invoke("ftp-save-creds", host, port, user, pass, mode),
+  ftpLoadCreds: (user) => ipcRenderer.invoke("ftp-load-creds", user),
+  ftpGetSavedUsers: () => ipcRenderer.invoke("ftp-get-saved-users"),
+  ftpGetLastLogin: () => ipcRenderer.invoke("ftp-get-last-login"),
+  ftpDeleteCreds: (user) => ipcRenderer.invoke("ftp-delete-creds", user),
+  ftpChmod: (remotePath, mode) => ipcRenderer.invoke("ftp-chmod", remotePath, mode),
+  onFtpTransferProgress: (callback) => {
+    ipcRenderer.on("ftp-transfer-progress", (_event, data) => callback(data));
+  },
+  onFtpTransferDone: (callback) => {
+    ipcRenderer.on("ftp-transfer-done", (_event, data) => callback(data));
+  },
 
   // File selection
   confirmFileSelection: (infoHash, selectedIndices) => ipcRenderer.invoke("confirm-file-selection", infoHash, selectedIndices),

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #DCE1E6;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      text-align: center;
+    }
+    .splash-logo {
+      width: 160px;
+      height: 160px;
+      border-radius: 24px;
+      object-fit: contain;
+      animation: splash-in 0.6s ease-out forwards;
+      opacity: 0;
+      transform: scale(0.8);
+      margin-bottom: 18px;
+    }
+    @keyframes splash-in {
+      to { opacity: 1; transform: scale(1); }
+    }
+    .splash-brand {
+      font-size: 16px;
+      font-weight: 600;
+      color: #1a1a1a;
+      animation: splash-in 0.6s ease-out 0.15s forwards;
+      opacity: 0;
+    }
+    .splash-credit {
+      font-size: 11px;
+      color: #777777;
+      margin-top: 4px;
+      animation: splash-in 0.6s ease-out 0.25s forwards;
+      opacity: 0;
+    }
+    .splash-loader {
+      font-size: 13px;
+      color: #555555;
+      letter-spacing: 1px;
+      margin-top: 16px;
+      animation: splash-in 0.6s ease-out 0.35s forwards;
+      opacity: 0;
+    }
+    .dot {
+      animation: blink 1.4s infinite both;
+    }
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink {
+      0%, 80%, 100% { opacity: 0; }
+      40% { opacity: 1; }
+    }
+    #defaultPrompt {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      margin-top: 20px;
+      padding: 16px 20px;
+      background: rgba(255,255,255,0.7);
+      border-radius: 12px;
+      animation: splash-in 0.4s ease-out forwards;
+    }
+    #defaultPrompt .prompt-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #1a1a1a;
+    }
+    #defaultPrompt .prompt-desc {
+      font-size: 11px;
+      color: #555;
+      line-height: 1.4;
+      max-width: 280px;
+    }
+    #defaultPrompt .prompt-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 4px;
+    }
+    #defaultPrompt button {
+      padding: 7px 18px;
+      border: none;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.15s;
+    }
+    #btnDefaultYes {
+      background: #4F46E5;
+      color: #fff;
+    }
+    #btnDefaultYes:hover {
+      background: #4338CA;
+    }
+    #btnDefaultNo {
+      background: #E5E7EB;
+      color: #374151;
+    }
+    #btnDefaultNo:hover {
+      background: #D1D5DB;
+    }
+    #defaultResult {
+      display: none;
+      font-size: 12px;
+      color: #4F46E5;
+      font-weight: 600;
+      margin-top: 8px;
+      animation: splash-in 0.3s ease-out forwards;
+    }
+  </style>
+</head>
+<body>
+  <img id="logo" class="splash-logo" src="" alt="RO^JO" />
+  <div class="splash-brand">RO^JO File Downloader</div>
+  <div class="splash-credit">Version 1.0. Rohan Joackhim — patent pending</div>
+  <div class="splash-loader" id="loader">Loading<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></div>
+  <div id="defaultPrompt">
+    <div class="prompt-title">Make RO^JO your default downloader?</div>
+    <div class="prompt-desc">Set RO^JO as the default app for magnet links, .torrent files, and large file downloads.</div>
+    <div class="prompt-buttons">
+      <button id="btnDefaultYes">Yes, make default</button>
+      <button id="btnDefaultNo">Not now</button>
+    </div>
+    <div id="defaultResult"></div>
+  </div>
+  <script>
+    (async function() {
+      try {
+        const logoPath = await rojoAPI.getAssetPath("logo.png");
+        if (logoPath) document.getElementById("logo").src = logoPath;
+      } catch (e) {
+        console.error("Failed to load splash logo:", e);
+      }
+
+      // Check if already default — if not, show prompt
+      try {
+        const def = await rojoAPI.checkIsDefault();
+        if (def.isDefault) {
+          // Already default, close splash immediately
+          rojoAPI.splashClose();
+        } else {
+          const prompt = document.getElementById("defaultPrompt");
+          const loader = document.getElementById("loader");
+          const result = document.getElementById("defaultResult");
+
+          // Show prompt after a brief delay so the loading text is visible
+          setTimeout(() => {
+            loader.style.display = "none";
+            prompt.style.display = "flex";
+          }, 800);
+
+          document.getElementById("btnDefaultYes").addEventListener("click", async () => {
+            try {
+              await rojoAPI.setAsDefault();
+              result.textContent = "✓ RO^JO is now your default downloader";
+              result.style.display = "block";
+              document.querySelector(".prompt-buttons").style.display = "none";
+              // Close splash after showing confirmation briefly
+              setTimeout(() => rojoAPI.splashClose(), 1500);
+            } catch (e) {
+              result.textContent = "Could not set default. You can do this later from the app.";
+              result.style.display = "block";
+              setTimeout(() => rojoAPI.splashClose(), 2000);
+            }
+          });
+
+          document.getElementById("btnDefaultNo").addEventListener("click", () => {
+            rojoAPI.splashClose();
+          });
+        }
+      } catch (e) {
+        console.warn("Default check failed:", e);
+        // If check fails, close splash so app isn't stuck
+        rojoAPI.splashClose();
+      }
+    })();
+  </script>
+</body>
+</html>

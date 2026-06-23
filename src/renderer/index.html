@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:;">
-  <title>RO/JO</title>
+  <title>RO^JO File Downloader</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -14,8 +14,7 @@
     <!-- Custom Title Bar -->
     <div class="title-bar">
       <div class="title-bar-left">
-        <h1 class="title-bar-brand">RO/JO</h1>
-        <span class="title-bar-tagline">File Downloader</span>
+        <h1 class="title-bar-brand">RO^JO File Downloader</h1>
       </div>
       <div class="title-bar-controls">
         <button class="title-bar-btn" id="btnMinimize">
@@ -30,16 +29,12 @@
     <header class="toolbar">
       <div class="toolbar-left">
         <img src="" alt="Rojo" class="app-logo" id="appLogo" />
-        <span class="app-tagline">Small but mighty</span>
+        <span class="app-tagline">Small but mighty titanium silver</span>
       </div>
       <div class="toolbar-actions">
         <button class="btn btn-primary" id="btnAddMagnet" title="Add magnet link (⌘+M)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
           <span>Add Magnet</span>
-        </button>
-        <button class="btn btn-secondary" id="btnOpenFile" title="Open .torrent file (⌘+O)">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-          <span>Open File</span>
         </button>
         <button class="btn btn-secondary" id="btnAddUrl" title="Add torrent from URL (⌘+U)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
@@ -64,6 +59,14 @@
         <button class="btn btn-secondary" id="btnHistory" title="Torrent history">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           <span>History</span>
+        </button>
+        <button class="btn btn-secondary" id="btnFtpMode" title="FTP Mode">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 12h20M5 5l14 14M19 5L5 19"/></svg>
+          <span>FTP</span>
+        </button>
+        <button class="btn btn-secondary" id="btnPortSettings" title="Set torrent listening port">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          <span>Port</span>
         </button>
       </div>
     </header>
@@ -130,6 +133,72 @@
       </div>
     </main>
 
+    <!-- FTP Panel -->
+    <div id="ftpPanel" class="ftp-panel" style="display:none;">
+      <div class="ftp-connection-bar">
+        <input type="text" id="ftpHost" placeholder="Host (e.g. 192.168.1.10)" />
+        <input type="text" id="ftpPort" placeholder="Port" value="990" style="width:70px;" />
+        <input type="text" id="ftpUser" placeholder="Username" />
+        <input type="password" id="ftpPass" placeholder="Password" />
+        <select id="ftpSecure" style="width:100px;">
+          <option value="ftps">FTPS</option>
+          <option value="ftp">FTP (insecure)</option>
+          <option value="sftp">SFTP</option>
+        </select>
+        <select id="ftpSavedAccounts" style="width:140px;" title="Saved FTP accounts">
+          <option value="">Saved accounts...</option>
+        </select>
+        <button class="btn btn-small btn-secondary" id="btnFtpDeleteAccount" title="Remove selected saved account" style="display:none;">🗑</button>
+        <button class="btn btn-primary" id="btnFtpConnect">Connect</button>
+        <button class="btn btn-secondary" id="btnFtpDisconnect" style="display:none;">Disconnect</button>
+        <span id="ftpConnStatus" class="ftp-conn-status"></span>
+      </div>
+      <div id="ftpWarning" class="ftp-warning" style="display:none;">
+        ⚠️ Plain FTP sends your credentials and files unencrypted. Use FTPS or SFTP for secure transfers.
+      </div>
+      <div id="ftpEncryptionInfo" class="ftp-encryption-info" style="display:none;">
+        🔒 Military-grade encryption active — AES-256-GCM, TLS 1.3, forward secrecy enforced
+      </div>
+
+      <div class="ftp-panes">
+        <div class="ftp-pane">
+          <div class="ftp-pane-header">
+            <span class="ftp-pane-title">Local</span>
+            <button class="btn btn-small btn-secondary" id="btnFtpLocalUp">Up</button>
+            <button class="btn btn-small btn-secondary" id="btnFtpLocalRefresh">Refresh</button>
+          </div>
+          <div class="ftp-pane-path" id="ftpLocalPath"></div>
+          <div class="ftp-file-list" id="ftpLocalList"></div>
+        </div>
+        <div class="ftp-pane">
+          <div class="ftp-pane-header">
+            <span class="ftp-pane-title">Remote</span>
+            <button class="btn btn-small btn-secondary" id="btnFtpRemoteUp">Up</button>
+            <button class="btn btn-small btn-secondary" id="btnFtpRemoteRefresh">Refresh</button>
+          </div>
+          <div class="ftp-pane-path" id="ftpRemotePath"></div>
+          <div class="ftp-file-list" id="ftpRemoteList"></div>
+        </div>
+      </div>
+
+      <div id="ftpRemoteContextMenu" class="ftp-context-menu" style="display:none;">
+        <div class="ftp-context-item" id="ftpCtxChmod">Set permissions...</div>
+      </div>
+
+      <div class="ftp-transfer-bar">
+        <button class="btn btn-primary" id="btnFtpUpload" disabled>Upload →</button>
+        <button class="btn btn-primary" id="btnFtpDownload" disabled>← Download</button>
+      </div>
+
+      <div class="ftp-progress-section">
+        <div class="ftp-progress-header">
+          <div class="ftp-progress-title">Transfers</div>
+          <button class="btn btn-small btn-secondary" id="btnFtpClearTransfers">Clear</button>
+        </div>
+        <div id="ftpTransferList" class="ftp-transfer-list"></div>
+      </div>
+    </div>
+
     <footer class="status-bar">
       <div class="status-left">
         <span id="statusText">Ready</span>
@@ -140,6 +209,10 @@
         <button class="status-btn" id="btnSpeedTest" title="Run internet speed test">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
           <span>Speed Test</span>
+        </button>
+        <button class="status-btn" id="btnPortCheck" title="Check if torrent port is open">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          <span>Open Ports</span>
         </button>
         <span class="vpn-status" id="vpnStatus" style="display:none;">
           <span class="vpn-dot"></span>
@@ -185,6 +258,125 @@
     </div>
   </div>
 
+  <!-- Port Settings Modal -->
+  <div id="portModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Torrent Port</h3>
+        <button class="modal-close" id="btnPortClose">&times;</button>
+      </div>
+      <p class="modal-hint">Set a custom listening port for torrent peer connections. Use an unblocked port if your ISP blocks the default.</p>
+      <div class="port-input-row">
+        <input type="number" id="portInput" placeholder="e.g. 51413" min="1" max="65535" style="width:120px;" />
+        <button class="btn btn-secondary" id="btnPortRandom" title="Pick a random port">Random</button>
+      </div>
+      <div class="port-current-row">
+        <span>Current port: <strong id="portCurrentValue">--</strong></span>
+      </div>
+      <div id="portStatus" class="port-status"></div>
+      <div class="port-actions">
+        <button class="btn btn-primary" id="btnPortApply">Save Port</button>
+      </div>
+      <p class="port-note">Note: Restart the app after changing the port for it to take effect. Active torrents will be restored automatically.</p>
+    </div>
+  </div>
+
+  <!-- Port Check Modal -->
+  <div id="portCheckModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-content--wide">
+      <div class="modal-header">
+        <h3>Open Port Check</h3>
+        <button class="modal-close" id="btnPortCheckClose">&times;</button>
+      </div>
+      <p class="modal-hint">Scans common ports to show which are open or closed, what process is using each port, and whether your torrent port is reachable from the internet.</p>
+      <div class="port-check-summary">
+        <div class="port-check-summary-item">
+          <span class="port-check-label">Public IP</span>
+          <span class="port-check-value" id="portCheckIP">--</span>
+        </div>
+        <div class="port-check-summary-item">
+          <span class="port-check-label">Torrent Port</span>
+          <span class="port-check-value" id="portCheckPort">--</span>
+        </div>
+        <div class="port-check-summary-item">
+          <span class="port-check-label">Overall Status</span>
+          <span class="port-check-value" id="portCheckStatus">Click 'Check Now'</span>
+        </div>
+      </div>
+      <div class="port-check-table-wrap">
+        <table class="port-check-table" id="portCheckTable">
+          <thead>
+            <tr>
+              <th>Port</th>
+              <th>Service</th>
+              <th>Local</th>
+              <th>External</th>
+              <th>Process</th>
+            </tr>
+          </thead>
+          <tbody id="portCheckTableBody">
+            <tr><td colspan="5" style="text-align:center;color:var(--text-muted);">No data yet. Click "Check Now".</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="port-check-actions">
+        <button class="btn btn-primary" id="btnPortCheckRun">Check Now</button>
+      </div>
+      <div id="portCheckAdvice" class="port-check-advice" style="display:none;"></div>
+    </div>
+  </div>
+
+  <!-- Chmod Modal -->
+  <div id="chmodModal" class="modal ftp-chmod-modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Set Permissions</h3>
+        <button class="modal-close" id="btnChmodClose">&times;</button>
+      </div>
+      <p class="modal-hint" id="chmodFileName">Remote file</p>
+      <div class="ftp-chmod-presets">
+        <button class="btn btn-small btn-secondary" data-preset="644">Read only</button>
+        <button class="btn btn-small btn-secondary" data-preset="664">Read & Write</button>
+        <button class="btn btn-small btn-secondary" data-preset="755">Executable</button>
+        <button class="btn btn-small btn-secondary" data-preset="777">Full access</button>
+      </div>
+      <div class="ftp-chmod-grid">
+        <div class="ftp-chmod-row">
+          <span></span>
+          <span>Read</span>
+          <span>Write</span>
+          <span>Execute</span>
+        </div>
+        <div class="ftp-chmod-row">
+          <span>Owner</span>
+          <input type="checkbox" id="chmodOwnerRead" />
+          <input type="checkbox" id="chmodOwnerWrite" />
+          <input type="checkbox" id="chmodOwnerExec" />
+        </div>
+        <div class="ftp-chmod-row">
+          <span>Group</span>
+          <input type="checkbox" id="chmodGroupRead" />
+          <input type="checkbox" id="chmodGroupWrite" />
+          <input type="checkbox" id="chmodGroupExec" />
+        </div>
+        <div class="ftp-chmod-row">
+          <span>Others</span>
+          <input type="checkbox" id="chmodOtherRead" />
+          <input type="checkbox" id="chmodOtherWrite" />
+          <input type="checkbox" id="chmodOtherExec" />
+        </div>
+      </div>
+      <div class="ftp-chmod-hint">Mode: <span id="chmodModeValue">644</span></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btnCancelChmod">Cancel</button>
+        <button class="btn btn-primary" id="btnConfirmChmod">Apply</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Magnet Dialog -->
   <div id="magnetModal" class="modal">
     <div class="modal-backdrop"></div>
@@ -226,6 +418,16 @@
     <div class="modal-content">
       <h3>Download from URL</h3>
       <input type="text" id="urlInput" placeholder="https://example.com/file.zip" autofocus>
+      <div class="url-threads-row">
+        <label for="urlThreads" class="url-threads-label">Connections</label>
+        <select id="urlThreads" class="url-threads-select">
+          <option value="1">1 (single)</option>
+          <option value="2">2</option>
+          <option value="4" selected>4 (recommended)</option>
+          <option value="8">8</option>
+          <option value="16">16 (max)</option>
+        </select>
+      </div>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="btnCancelUrl">Cancel</button>
         <button class="btn btn-primary" id="btnConfirmUrl">Download</button>
@@ -242,6 +444,10 @@
       <input type="text" id="scheduleUrlInput" placeholder="https://example.com/file.zip">
       <label for="scheduleTime" style="display:block;font-size:0.75rem;color:var(--text-muted);margin:8px 0 4px;">Start at</label>
       <input type="datetime-local" id="scheduleTime">
+      <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--text);margin:10px 0;cursor:pointer;">
+        <input type="checkbox" id="scheduleShutdown" style="width:16px;height:16px;accent-color:var(--accent);">
+        <span>Shut down app when all downloads finish</span>
+      </label>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="btnCancelSchedule">Cancel</button>
         <button class="btn btn-primary" id="btnConfirmSchedule">Schedule</button>
@@ -255,7 +461,7 @@
   <!-- History Modal -->
   <div id="historyModal" class="modal">
     <div class="modal-backdrop"></div>
-    <div class="modal-content modal-wide" style="max-width:520px;">
+    <div class="modal-content modal-wide" style="max-width:700px;">
       <div class="modal-header-row">
         <h3>Torrent History</h3>
         <button class="btn btn-small btn-danger" id="btnClearHistory">Clear All</button>

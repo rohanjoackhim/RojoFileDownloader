@@ -66,7 +66,7 @@ function escapeHtml(str) {
 // Set app logo from correct asset path (avoids asar .. path issues)
 (async function loadLogo() {
   try {
-    const logoPath = await rojoAPI.getAssetPath("icon.png");
+    const logoPath = await rojoAPI.getAssetPath("logo.png");
     if (logoPath) $("appLogo").src = logoPath;
   } catch (e) {
     console.error("[RO^JO] Failed to load logo:", e);
@@ -265,7 +265,7 @@ function createTorrentElement(t) {
 
   return {
     el,
-    refs: { nameEl, badge, sizeEl, peersEl, speedEl, etaEl, fill, actions, iconText },
+    refs: { nameEl, badge, sizeEl, peersEl, speedEl, etaEl, fill, actions, iconText, el },
   };
 }
 
@@ -302,9 +302,25 @@ function updateTorrentElement(refs, t) {
   const isDone = t.status === "completed";
   const hash = t.infoHash;
 
-  // Update icon text with percentage or "Done" when complete
+  // Update icon text: percentage normally, staggered letter reveal for "Done"
   const iconText = isDone ? "Done" : pct + "%";
-  if (last.iconText !== iconText) refs.iconText.textContent = iconText;
+  if (last.iconText !== iconText) {
+    if (isDone) {
+      refs.iconText.innerHTML = "";
+      refs.iconText.classList.add("done-container");
+      "Done".split("").forEach((letter, i) => {
+        const span = document.createElement("span");
+        span.textContent = letter;
+        span.className = "done-letter";
+        span.style.animationDelay = (i * 0.25) + "s";
+        refs.iconText.appendChild(span);
+      });
+    } else {
+      refs.iconText.classList.remove("done-container");
+      refs.iconText.textContent = pct + "%";
+    }
+  }
+  refs.el.classList.toggle("completed", isDone);
   refs._last = { name: t.name, status: t.status, pct, size: sizeText, peers: peersText, speed: speedText, eta: etaText, fillClass, iconText };
 
   const existingStatus = refs.actions.dataset.status;
@@ -591,25 +607,6 @@ async function secureDelete(infoHash) {
   }
 }
 
-async function openFile() {
-  try {
-    const result = await rojoAPI.selectFile();
-    if (!result) return;
-
-    updateStatus("Choose download folder…");
-    const res = await rojoAPI.addFile(result.buffer);
-    if (res.ok) {
-      showToast(`Added: ${res.name}`);
-    } else {
-      showToast(res.error || "Failed to add", "error");
-    }
-  } catch (e) {
-    showToast(e.message || "Failed to add", "error");
-  } finally {
-    updateStatus("Ready");
-  }
-}
-
 async function openFolder() {
   await rojoAPI.openFolder();
 }
@@ -642,12 +639,13 @@ async function addUrlDownload() {
     $("urlError").textContent = "URL must start with http:// or https://";
     return;
   }
+  const threads = parseInt($("urlThreads").value) || 4;
   $("urlError").textContent = "";
   closeUrlModal();
   try {
-    const res = await rojoAPI.startHttpDownload(url);
+    const res = await rojoAPI.startHttpDownload(url, null, threads);
     if (res.ok) {
-      showToast("Download started");
+      showToast(`Download started (${threads} connections)`);
     } else {
       showToast(res.error || "Failed to start download", "error");
     }
@@ -709,11 +707,13 @@ async function confirmSchedule() {
     $("scheduleError").textContent = "Please select a future time";
     return;
   }
+  const shutdownAfterComplete = $("scheduleShutdown").checked;
   $("scheduleError").textContent = "";
   try {
-    await rojoAPI.scheduleDownload(url, null, scheduledTime);
+    await rojoAPI.scheduleDownload(url, null, scheduledTime, shutdownAfterComplete);
     showToast("Download scheduled");
     $("scheduleUrlInput").value = "";
+    $("scheduleShutdown").checked = false;
     renderScheduleList();
   } catch (e) {
     $("scheduleError").textContent = e.message || "Failed to schedule";
@@ -741,7 +741,8 @@ function renderScheduleList() {
       const date = new Date(item.scheduledTime);
       const timeStr = date.toLocaleString();
       const name = item.url.split("/").pop() || "Download";
-      row.innerHTML = `<span class="schedule-name" title="${escapeHtml(item.url)}">${escapeHtml(name)}</span><span class="schedule-time">${timeStr}</span><button class="btn-small btn-remove" data-id="${item.id}">Cancel</button>`;
+      const shutdownBadge = item.shutdownAfterComplete ? '<span style="color:#f59e0b;font-size:0.65rem;margin-left:4px;">&#x23FB; shutdown</span>' : '';
+      row.innerHTML = `<span class="schedule-name" title="${escapeHtml(item.url)}">${escapeHtml(name)}${shutdownBadge}</span><span class="schedule-time">${timeStr}</span><button class="btn-small btn-remove" data-id="${item.id}">Cancel</button>`;
       row.querySelector("button").addEventListener("click", () => cancelScheduled(item.id));
       el.appendChild(row);
     });
@@ -776,21 +777,24 @@ async function renderHistoryList() {
     el.style.display = "block";
     emptyEl.style.display = "none";
 
-    history.forEach((item) => {
+    history.forEach((item, index) => {
       const row = document.createElement("div");
       row.className = "history-item";
-      const date = item.addedAt ? new Date(item.addedAt).toLocaleDateString() : "Unknown";
+      const dateObj = item.addedAt ? new Date(item.addedAt) : null;
+      const dateStr = dateObj ? dateObj.toLocaleDateString() : "Unknown";
+      const timeStr = dateObj ? dateObj.toLocaleTimeString() : "";
       const name = escapeHtml(item.name || "Unknown");
       row.innerHTML = `
         <div class="history-info">
           <div class="history-name" title="${name}">${name}</div>
-          <div class="history-date">${date}</div>
+          <div class="history-date">${dateStr} &nbsp;${timeStr}</div>
         </div>
-        <div class="history-actions">
-          <button class="btn-small btn-primary" data-magnet="${escapeHtml(item.magnetUri || "")}">Add</button>
+        <div class="history-actions" style="display:flex;gap:6px;">
+          <button class="btn-small btn-primary btn-add-history" data-magnet="${escapeHtml(item.magnetUri || "")}">Add</button>
+          <button class="btn-small btn-remove btn-del-history" data-index="${index}">Delete</button>
         </div>
       `;
-      const addBtn = row.querySelector("button");
+      const addBtn = row.querySelector(".btn-add-history");
       addBtn.addEventListener("click", () => {
         const magnet = addBtn.dataset.magnet;
         if (magnet && magnet.startsWith("magnet:")) {
@@ -799,6 +803,16 @@ async function renderHistoryList() {
           closeHistoryModal();
         } else {
           showToast("No magnet link available", "error");
+        }
+      });
+      const delBtn = row.querySelector(".btn-del-history");
+      delBtn.addEventListener("click", async () => {
+        try {
+          await rojoAPI.deleteHistoryEntry(index);
+          showToast("Entry deleted");
+          renderHistoryList();
+        } catch (e) {
+          showToast("Failed to delete entry", "error");
         }
       });
       el.appendChild(row);
@@ -922,8 +936,6 @@ $("btnCancelMagnet").addEventListener("click", closeModal);
 $("magnetInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") addMagnet();
 });
-$("btnOpenFile").addEventListener("click", openFile);
-
 $("btnSpeedTest").addEventListener("click", async () => {
   const btn = $("btnSpeedTest");
   const originalText = btn.querySelector("span").textContent;
@@ -1090,14 +1102,29 @@ $("btnBackground").addEventListener("click", async () => {
 });
 
 $("btnSetDefault").addEventListener("click", async () => {
+  const btn = $("btnSetDefault");
+  const isCurrentlyDefault = btn.classList.contains("is-default");
   try {
-    await rojoAPI.setAsDefault();
-    const check = await rojoAPI.checkIsDefault();
-    // Check magnet specifically — on macOS this requires the app to be in /Applications
-    const isMagnetDefault = check.magnet;
-    updateDefaultStar(isMagnetDefault);
-    if (!isMagnetDefault) {
-      showToast("Set for .torrent files. For magnet links, move Rojo to /Applications.", "warning");
+    if (isCurrentlyDefault) {
+      // Already default — remove as default
+      await rojoAPI.removeAsDefault();
+      const check = await rojoAPI.checkIsDefault();
+      updateDefaultStar(check.isDefault);
+      if (!check.isDefault) {
+        showToast("RO^JO is no longer your default torrent client", "success");
+      } else {
+        showToast("Could not remove default status. You may need to change it in System Settings.", "warning");
+      }
+    } else {
+      // Not default — set as default
+      await rojoAPI.setAsDefault();
+      const check = await rojoAPI.checkIsDefault();
+      updateDefaultStar(check.isDefault);
+      if (check.isDefault) {
+        showToast("RO^JO is now your default torrent client", "success");
+      } else {
+        showToast("Set for .torrent files. For magnet links, move Rojo to /Applications.", "warning");
+      }
     }
   } catch (e) {
     showToast(e.message, "error");
@@ -1424,12 +1451,19 @@ function updateInternetUI(isOnline) {
   const el = $("internetStatus");
   const dot = $("internetDot");
   const label = $("internetLabel");
+  const speedBtn = $("btnSpeedTest");
   if (isOnline) {
     el.classList.add("online");
     label.textContent = "Online";
+    speedBtn.disabled = false;
+    speedBtn.classList.remove("disabled");
+    speedBtn.title = "Run internet speed test";
   } else {
     el.classList.remove("online");
     label.textContent = "Offline";
+    speedBtn.disabled = true;
+    speedBtn.classList.add("disabled");
+    speedBtn.title = "Speed test unavailable while offline";
   }
 }
 
@@ -1545,6 +1579,439 @@ setInterval(refreshVpnStatus, 5000);
 // Check internet connectivity every 10 seconds
 setInterval(checkInternet, 10000);
 
+// ---------- FTP Mode ----------
+
+let ftpMode = false;
+let ftpLocalCwd = null;
+let ftpRemoteCwd = null;
+let ftpLocalSelected = null;
+let ftpRemoteSelected = null;
+const ftpTransfers = new Map();
+
+async function toggleFtpMode() {
+  ftpMode = !ftpMode;
+  const main = document.querySelector("main.content");
+  const ftpPanel = $("ftpPanel");
+  const btn = $("btnFtpMode");
+  if (ftpMode) {
+    if (main) main.style.display = "none";
+    ftpPanel.style.display = "flex";
+    btn.querySelector("span").textContent = "Torrent Mode";
+    btn.title = "Switch to Torrent Mode";
+    await loadFtpSavedAccounts();
+    await loadFtpLastLogin();
+    loadFtpLocal(ftpLocalCwd);
+  } else {
+    if (main) main.style.display = "";
+    ftpPanel.style.display = "none";
+    btn.querySelector("span").textContent = "FTP Mode";
+    btn.title = "Switch to FTP Mode";
+  }
+}
+
+let ftpContextMenuTarget = null;
+
+function renderFtpList(containerId, items, isLocal) {
+  const container = $(containerId);
+  container.innerHTML = "";
+  for (const item of items) {
+    const el = document.createElement("div");
+    el.className = "ftp-file-item";
+    const icon = item.isDirectory
+      ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`
+      : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>`;
+    const dateText = item.date && item.date !== ""
+      ? new Date(item.date).toLocaleString([], { month: "short", day: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })
+      : "";
+    const permsText = item.permissions || "";
+    el.innerHTML = `<span class="ftp-file-icon">${icon}</span><span class="ftp-file-name">${escapeHtml(item.name)}</span><span class="ftp-file-size">${item.isDirectory ? "" : formatBytes(item.size)}</span><span class="ftp-file-date">${dateText}</span><span class="ftp-file-perms">${permsText}</span>`;
+    el.title = `${item.name}  •  ${item.isDirectory ? "Directory" : formatBytes(item.size)}  •  ${dateText || "No date"}  •  ${permsText || "No permissions"}`;
+    el.addEventListener("contextmenu", (e) => {
+      if (!isLocal) {
+        e.preventDefault();
+        ftpContextMenuTarget = item;
+        showFtpContextMenu(e.clientX, e.clientY);
+      }
+    });
+    el.addEventListener("click", () => {
+      if (isLocal) {
+        ftpLocalSelected = item;
+        container.querySelectorAll(".ftp-file-item").forEach(e => e.classList.remove("selected"));
+        el.classList.add("selected");
+        $("btnFtpUpload").disabled = item.isDirectory;
+      } else {
+        ftpRemoteSelected = item;
+        container.querySelectorAll(".ftp-file-item").forEach(e => e.classList.remove("selected"));
+        el.classList.add("selected");
+        $("btnFtpDownload").disabled = item.isDirectory;
+      }
+    });
+    if (item.isDirectory) {
+      el.addEventListener("dblclick", () => {
+        if (isLocal) {
+          loadFtpLocal(item.path);
+        } else {
+          loadFtpRemote(item.path);
+        }
+      });
+    }
+    container.appendChild(el);
+  }
+}
+
+async function loadFtpLocal(dirPath) {
+  const res = await rojoAPI.ftpListLocal(dirPath);
+  if (res.ok) {
+    ftpLocalCwd = res.cwd;
+    ftpLocalSelected = null;
+    $("btnFtpUpload").disabled = true;
+    $("ftpLocalPath").textContent = res.cwd;
+    renderFtpList("ftpLocalList", res.items, true);
+  } else {
+    $("ftpLocalPath").textContent = "Error: " + res.error;
+  }
+}
+
+async function loadFtpRemote(dirPath) {
+  const res = await rojoAPI.ftpListRemote(dirPath);
+  if (res.ok) {
+    ftpRemoteCwd = res.cwd;
+    ftpRemoteSelected = null;
+    $("btnFtpDownload").disabled = true;
+    $("ftpRemotePath").textContent = res.cwd;
+    renderFtpList("ftpRemoteList", res.items, false);
+  } else {
+    $("ftpRemotePath").textContent = "Error: " + res.error;
+  }
+}
+
+function showFtpContextMenu(x, y) {
+  const menu = $("ftpRemoteContextMenu");
+  menu.style.display = "block";
+  menu.style.left = Math.min(x, window.innerWidth - 160) + "px";
+  menu.style.top = Math.min(y, window.innerHeight - 40) + "px";
+}
+
+function hideFtpContextMenu() {
+  $("ftpRemoteContextMenu").style.display = "none";
+  ftpContextMenuTarget = null;
+}
+
+function openChmodModal() {
+  if (!ftpContextMenuTarget) return;
+  $("chmodFileName").textContent = ftpContextMenuTarget.name;
+  const current = ftpContextMenuTarget.permissions || "---------";
+  const mode = parsePermissionString(current);
+  setChmodCheckboxes(mode);
+  $("chmodModal").style.display = "flex";
+}
+
+function closeChmodModal() {
+  $("chmodModal").style.display = "none";
+}
+
+function parsePermissionString(perms) {
+  if (!perms || perms.length < 9) return 0o644;
+  const bits = [
+    perms[1] === "r", perms[2] === "w", perms[3] === "x",
+    perms[4] === "r", perms[5] === "w", perms[6] === "x",
+    perms[7] === "r", perms[8] === "w", perms[9] === "x",
+  ];
+  let mode = 0;
+  for (let i = 0; i < 9; i++) {
+    if (bits[i]) mode |= 1 << (8 - i);
+  }
+  return mode;
+}
+
+function setChmodCheckboxes(mode) {
+  $("chmodOwnerRead").checked = !!(mode & 0o400);
+  $("chmodOwnerWrite").checked = !!(mode & 0o200);
+  $("chmodOwnerExec").checked = !!(mode & 0o100);
+  $("chmodGroupRead").checked = !!(mode & 0o040);
+  $("chmodGroupWrite").checked = !!(mode & 0o020);
+  $("chmodGroupExec").checked = !!(mode & 0o010);
+  $("chmodOtherRead").checked = !!(mode & 0o004);
+  $("chmodOtherWrite").checked = !!(mode & 0o002);
+  $("chmodOtherExec").checked = !!(mode & 0o001);
+  updateChmodModeDisplay();
+}
+
+function getChmodMode() {
+  let mode = 0;
+  if ($("chmodOwnerRead").checked) mode |= 0o400;
+  if ($("chmodOwnerWrite").checked) mode |= 0o200;
+  if ($("chmodOwnerExec").checked) mode |= 0o100;
+  if ($("chmodGroupRead").checked) mode |= 0o040;
+  if ($("chmodGroupWrite").checked) mode |= 0o020;
+  if ($("chmodGroupExec").checked) mode |= 0o010;
+  if ($("chmodOtherRead").checked) mode |= 0o004;
+  if ($("chmodOtherWrite").checked) mode |= 0o002;
+  if ($("chmodOtherExec").checked) mode |= 0o001;
+  return mode;
+}
+
+function updateChmodModeDisplay() {
+  $("chmodModeValue").textContent = getChmodMode().toString(8).padStart(3, "0");
+}
+
+function applyChmodPreset(preset) {
+  setChmodCheckboxes(parseInt(preset, 8));
+}
+
+async function applyChmod() {
+  if (!ftpContextMenuTarget) return;
+  const mode = getChmodMode();
+  try {
+    const res = await rojoAPI.ftpChmod(ftpContextMenuTarget.path, mode);
+    if (res.ok) {
+      showToast("Permissions updated", "success");
+      closeChmodModal();
+      hideFtpContextMenu();
+      await loadFtpRemote(ftpRemoteCwd);
+    } else {
+      showToast(res.error || "Failed to change permissions", "error");
+    }
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+}
+
+async function ftpConnect() {
+  const host = $("ftpHost").value.trim();
+  const port = $("ftpPort").value.trim();
+  const user = $("ftpUser").value.trim();
+  const pass = $("ftpPass").value;
+  const mode = $("ftpSecure").value;
+  if (!host) { $("ftpConnStatus").textContent = "Enter host"; return; }
+  if (!user) { $("ftpConnStatus").textContent = "Enter username"; return; }
+
+  // Auto-fill default port if empty
+  const defaultPort = mode === "sftp" ? "22" : (mode === "ftps" ? "990" : "21");
+  const actualPort = port || defaultPort;
+
+  $("ftpConnStatus").textContent = "Connecting...";
+  $("ftpConnStatus").className = "ftp-conn-status";
+  const res = await rojoAPI.ftpConnect(host, actualPort, user, pass, mode);
+  if (res.ok) {
+    $("ftpConnStatus").textContent = "Connected (" + mode.toUpperCase() + ")";
+    $("ftpConnStatus").className = "ftp-conn-status connected";
+    $("btnFtpConnect").style.display = "none";
+    $("btnFtpDisconnect").style.display = "";
+    // Always save credentials after a successful login (encrypted)
+    const saveRes = await rojoAPI.ftpSaveCreds(host, actualPort, user, pass, mode);
+    if (!saveRes.ok) {
+      console.warn("[RO^JO] Could not save credentials:", saveRes.error);
+    } else {
+      await loadFtpSavedAccounts();
+    }
+    await loadFtpRemote(null);
+  } else {
+    $("ftpConnStatus").textContent = res.error || "Failed";
+    $("ftpConnStatus").className = "ftp-conn-status error";
+  }
+}
+
+async function loadFtpSavedAccounts() {
+  try {
+    const res = await rojoAPI.ftpGetSavedUsers();
+    const select = $("ftpSavedAccounts");
+    const currentSelection = select.value;
+    select.innerHTML = '<option value="">Saved accounts...</option>';
+    if (res.ok && res.users) {
+      for (const user of res.users) {
+        const option = document.createElement("option");
+        option.value = user;
+        option.textContent = user;
+        select.appendChild(option);
+      }
+    }
+    if (currentSelection && Array.from(select.options).some(o => o.value === currentSelection)) {
+      select.value = currentSelection;
+    }
+    $("btnFtpDeleteAccount").style.display = select.value ? "" : "none";
+  } catch (e) {
+    console.warn("[RO^JO] Failed to load saved accounts:", e);
+  }
+}
+
+async function loadFtpLastLogin() {
+  try {
+    const res = await rojoAPI.ftpGetLastLogin();
+    if (res.ok) {
+      $("ftpHost").value = res.host || "";
+      $("ftpPort").value = res.port || "";
+      $("ftpUser").value = res.user || "";
+      $("ftpPass").value = res.pass || "";
+      if (res.mode) $("ftpSecure").value = res.mode;
+      $("ftpWarning").style.display = res.mode === "ftp" ? "block" : "none";
+      $("ftpEncryptionInfo").style.display = (res.mode === "ftps" || res.mode === "sftp") ? "block" : "none";
+      // Select this account in the dropdown
+      const select = $("ftpSavedAccounts");
+      await loadFtpSavedAccounts();
+      if (res.user && Array.from(select.options).some(o => o.value === res.user)) {
+        select.value = res.user;
+      }
+      $("btnFtpDeleteAccount").style.display = select.value ? "" : "none";
+    }
+  } catch (e) {
+    console.warn("[RO^JO] Failed to load last login:", e);
+  }
+}
+
+async function onFtpSavedAccountChange() {
+  const user = $("ftpSavedAccounts").value;
+  $("btnFtpDeleteAccount").style.display = user ? "" : "none";
+  if (!user) return;
+  try {
+    const res = await rojoAPI.ftpLoadCreds(user);
+    if (res.ok) {
+      $("ftpHost").value = res.host || "";
+      $("ftpPort").value = res.port || "";
+      $("ftpUser").value = res.user || "";
+      $("ftpPass").value = res.pass || "";
+      if (res.mode) $("ftpSecure").value = res.mode;
+      $("ftpWarning").style.display = res.mode === "ftp" ? "block" : "none";
+      $("ftpEncryptionInfo").style.display = (res.mode === "ftps" || res.mode === "sftp") ? "block" : "none";
+    }
+  } catch (e) {
+    console.warn("[RO^JO] Failed to load account:", e);
+  }
+}
+
+async function onFtpDeleteAccount() {
+  const user = $("ftpSavedAccounts").value;
+  if (!user) return;
+  try {
+    await rojoAPI.ftpDeleteCreds(user);
+    $("ftpSavedAccounts").value = "";
+    $("btnFtpDeleteAccount").style.display = "none";
+    await loadFtpSavedAccounts();
+    showToast("Saved account removed", "success");
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+}
+
+async function ftpDisconnect() {
+  await rojoAPI.ftpDisconnect();
+  $("ftpConnStatus").textContent = "Disconnected";
+  $("ftpConnStatus").className = "ftp-conn-status";
+  $("btnFtpConnect").style.display = "";
+  $("btnFtpDisconnect").style.display = "none";
+  $("ftpRemoteList").innerHTML = "";
+  $("ftpRemotePath").textContent = "";
+  ftpRemoteCwd = null;
+  ftpRemoteSelected = null;
+  $("btnFtpDownload").disabled = true;
+  // Re-load last successful login so the form is ready for reconnect
+  await loadFtpLastLogin();
+}
+
+function ftpLocalUp() {
+  if (!ftpLocalCwd) return;
+  const parent = ftpLocalCwd.split("/").slice(0, -1).join("/") || "/";
+  loadFtpLocal(parent);
+}
+
+async function ftpRemoteUp() {
+  if (!ftpRemoteCwd) return;
+  const parts = ftpRemoteCwd.split("/").filter(Boolean);
+  parts.pop();
+  const parent = "/" + parts.join("/");
+  await loadFtpRemote(parent);
+}
+
+async function ftpUpload() {
+  if (!ftpLocalSelected || ftpLocalSelected.isDirectory) return;
+  const remoteTarget = ftpRemoteCwd
+    ? (ftpRemoteCwd.endsWith("/") ? ftpRemoteCwd : ftpRemoteCwd + "/") + ftpLocalSelected.name
+    : ftpLocalSelected.name;
+  const res = await rojoAPI.ftpUpload(ftpLocalSelected.path, remoteTarget);
+  if (res.ok) {
+    showToast("Upload complete: " + ftpLocalSelected.name);
+    loadFtpRemote(ftpRemoteCwd);
+  } else {
+    showToast("Upload failed: " + res.error, "error");
+  }
+}
+
+async function ftpDownload() {
+  if (!ftpRemoteSelected || ftpRemoteSelected.isDirectory) return;
+  const localTarget = ftpLocalCwd
+    ? ftpLocalCwd + "/" + ftpRemoteSelected.name
+    : ftpRemoteSelected.name;
+  const res = await rojoAPI.ftpDownload(ftpRemoteSelected.path, localTarget);
+  if (res.ok) {
+    showToast("Download complete: " + ftpRemoteSelected.name);
+    loadFtpLocal(ftpLocalCwd);
+  } else {
+    showToast("Download failed: " + res.error, "error");
+  }
+}
+
+function formatTransferTime(date) {
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function updateFtpTransferProgress(data) {
+  let item = ftpTransfers.get(data.id);
+  if (!item) {
+    item = { el: null, name: data.name, direction: data.direction, startTime: new Date() };
+    const listEl = $("ftpTransferList");
+    const el = document.createElement("div");
+    el.className = "ftp-transfer-item";
+    el.innerHTML = `
+      <div class="ftp-transfer-row">
+        <span class="ftp-transfer-name">${escapeHtml(data.direction === "upload" ? "↑ " : "↓ ")}${escapeHtml(data.name)}</span>
+        <div class="ftp-transfer-bar-fill"><div style="width:0%"></div></div>
+        <span class="ftp-transfer-pct">0%</span>
+      </div>
+      <div class="ftp-transfer-meta">
+        <span class="ftp-transfer-time">${formatTransferTime(item.startTime)}</span>
+        <span class="ftp-transfer-status">Transferring...</span>
+      </div>`;
+    listEl.appendChild(el);
+    item.el = el;
+    ftpTransfers.set(data.id, item);
+    scrollToBottom(listEl);
+  }
+  const pct = data.total > 0 ? Math.round((data.bytes / data.total) * 100) : 0;
+  item.el.querySelector(".ftp-transfer-bar-fill > div").style.width = pct + "%";
+  item.el.querySelector(".ftp-transfer-pct").textContent = pct + "%";
+  item.el.querySelector(".ftp-transfer-status").textContent = `Transferring... ${formatBytes(data.bytes)} / ${formatBytes(data.total)}`;
+  scrollToBottom($("ftpTransferList"));
+}
+
+function markFtpTransferDone(data) {
+  const item = ftpTransfers.get(data.id);
+  if (!item) return;
+  const pctEl = item.el.querySelector(".ftp-transfer-pct");
+  const statusEl = item.el.querySelector(".ftp-transfer-status");
+  if (data.success) {
+    pctEl.textContent = "Done";
+    pctEl.className = "ftp-transfer-pct ftp-transfer-done";
+    item.el.querySelector(".ftp-transfer-bar-fill > div").style.width = "100%";
+    statusEl.textContent = "Completed";
+  } else {
+    pctEl.textContent = "Error";
+    pctEl.className = "ftp-transfer-pct ftp-transfer-error";
+    statusEl.textContent = data.error || "Failed";
+    statusEl.className = "ftp-transfer-status ftp-transfer-error";
+  }
+  // Keep the item in the log; do not auto-remove
+  scrollToBottom($("ftpTransferList"));
+}
+
+function scrollToBottom(el) {
+  if (el) el.scrollTop = el.scrollHeight;
+}
+
+function clearFtpTransfers() {
+  $("ftpTransferList").innerHTML = "";
+  ftpTransfers.clear();
+}
+
 // ---------- Event Wiring ----------
 
 $("btnVpnToggle").addEventListener("click", openVpnModal);
@@ -1568,6 +2035,222 @@ $("btnVpnImport").addEventListener("click", async () => {
   }
 });
 
+// FTP event wiring
+$("btnFtpMode").addEventListener("click", toggleFtpMode);
+
+// Port settings
+async function openPortModal() {
+  const res = await rojoAPI.getTorrentPort();
+  const curPort = res.port || 0;
+  $("portCurrentValue").textContent = curPort === 0 ? "Random" : curPort;
+  $("portInput").value = curPort === 0 ? "" : curPort;
+  $("portStatus").textContent = "";
+  $("portStatus").className = "port-status";
+  $("portModal").classList.add("show");
+}
+
+function closePortModal() {
+  $("portModal").classList.remove("show");
+}
+
+async function applyPort() {
+  let port = parseInt($("portInput").value.trim());
+  if (isNaN(port)) port = 0; // 0 = random
+  if (port < 0 || port > 65535) {
+    $("portStatus").textContent = "Port must be 0-65535";
+    $("portStatus").className = "port-status error";
+    return;
+  }
+  $("portStatus").textContent = "Saving port...";
+  $("portStatus").className = "port-status";
+  const res = await rojoAPI.setTorrentPort(port);
+  if (res.ok) {
+    $("portCurrentValue").textContent = res.port === 0 ? "Random" : res.port;
+    if (res.requiresRestart) {
+      $("portStatus").textContent = "Port saved. Restart the app to apply.";
+      $("portStatus").className = "port-status success";
+    } else {
+      $("portStatus").textContent = "Port set to " + (res.port === 0 ? "random" : res.port) + " ✓";
+      $("portStatus").className = "port-status success";
+      setTimeout(closePortModal, 1500);
+    }
+  } else {
+    $("portStatus").textContent = "Failed: " + (res.error || "Unknown error");
+    $("portStatus").className = "port-status error";
+  }
+}
+
+$("btnPortSettings").addEventListener("click", openPortModal);
+$("btnPortClose").addEventListener("click", closePortModal);
+$("portModal").querySelector(".modal-backdrop").addEventListener("click", closePortModal);
+$("btnPortApply").addEventListener("click", applyPort);
+$("btnPortRandom").addEventListener("click", () => {
+  $("portInput").value = Math.floor(Math.random() * 10000) + 50000;
+});
+
+// Port check
+function openPortCheckModal() {
+  $("portCheckModal").classList.add("show");
+  $("portCheckIP").textContent = "--";
+  $("portCheckPort").textContent = "--";
+  $("portCheckStatus").textContent = "Click 'Check Now'";
+  $("portCheckStatus").className = "port-check-value";
+  $("portCheckAdvice").style.display = "none";
+  $("portCheckTableBody").innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);">No data yet. Click "Check Now".</td></tr>';
+}
+
+function closePortCheckModal() {
+  $("portCheckModal").classList.remove("show");
+}
+
+async function runPortCheck() {
+  const btn = $("btnPortCheckRun");
+  btn.disabled = true;
+  btn.textContent = "Scanning ports...";
+  $("portCheckStatus").textContent = "Scanning...";
+  $("portCheckStatus").className = "port-check-value";
+  $("portCheckAdvice").style.display = "none";
+  $("portCheckTableBody").innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);">Scanning ports...</td></tr>';
+
+  try {
+    const res = await rojoAPI.checkPort();
+
+    // Summary
+    $("portCheckIP").textContent = res.publicIP || "Unavailable";
+    $("portCheckPort").textContent = res.port === 0 ? "Random" : res.port;
+
+    // Overall status
+    const statusEl = $("portCheckStatus");
+    const statusMap = {
+      "open": { text: "Port Open ✓", cls: "open" },
+      "closed": { text: "Port Closed ✗", cls: "closed" },
+      "random": { text: "Random Port", cls: "unknown" },
+      "not-listening": { text: "Not Listening", cls: "closed" },
+      "unknown": { text: "Unknown", cls: "unknown" },
+    };
+    const st = statusMap[res.status] || statusMap["unknown"];
+    statusEl.textContent = st.text;
+    statusEl.className = "port-check-value " + st.cls;
+
+    // Build table rows
+    const tbody = $("portCheckTableBody");
+    tbody.innerHTML = "";
+    for (const p of res.ports) {
+      const tr = document.createElement("tr");
+      if (p.port === res.port && res.port > 0) tr.className = "port-is-torrent";
+
+      // Port number
+      const tdPort = document.createElement("td");
+      tdPort.textContent = p.port;
+      tr.appendChild(tdPort);
+
+      // Service label
+      const tdService = document.createElement("td");
+      tdService.textContent = p.labels.join(", ") || "Unknown";
+      tr.appendChild(tdService);
+
+      // Local status
+      const tdLocal = document.createElement("td");
+      if (p.localOpen) {
+        tdLocal.innerHTML = '<span class="port-status-open">Open ✓</span>';
+      } else {
+        tdLocal.innerHTML = '<span class="port-status-closed">Closed ✗</span>';
+      }
+      tr.appendChild(tdLocal);
+
+      // External status
+      const tdExternal = document.createElement("td");
+      if (p.remoteReachable === true) {
+        tdExternal.innerHTML = '<span class="port-status-open">Open ✓</span>';
+      } else if (p.remoteReachable === false) {
+        tdExternal.innerHTML = '<span class="port-status-closed">Closed ✗</span>';
+      } else if (p.port === res.port && res.port > 0) {
+        tdExternal.innerHTML = '<span class="port-status-unknown">Unknown</span>';
+      } else {
+        tdExternal.innerHTML = '<span class="port-status-unknown">—</span>';
+      }
+      tr.appendChild(tdExternal);
+
+      // Process
+      const tdProcess = document.createElement("td");
+      if (p.processes && p.processes.length > 0) {
+        tdProcess.className = "port-process";
+        tdProcess.innerHTML = p.processes.map(proc => 
+          '<div>' + proc.replace(/</g, "&lt;") + '</div>'
+        ).join("");
+      } else {
+        tdProcess.className = "port-process-none";
+        tdProcess.textContent = p.localOpen ? "In use (no PID)" : "—";
+      }
+      tr.appendChild(tdProcess);
+
+      tbody.appendChild(tr);
+    }
+
+    // Advice
+    if (res.advice) {
+      $("portCheckAdvice").textContent = res.advice;
+      $("portCheckAdvice").style.display = "block";
+    }
+  } catch (e) {
+    $("portCheckStatus").textContent = "Error: " + (e.message || "Failed");
+    $("portCheckStatus").className = "port-check-value closed";
+    $("portCheckTableBody").innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--error);">Error: ' + (e.message || "Failed") + '</td></tr>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Check Now";
+  }
+}
+
+$("btnPortCheck").addEventListener("click", openPortCheckModal);
+$("btnPortCheckClose").addEventListener("click", closePortCheckModal);
+$("portCheckModal").querySelector(".modal-backdrop").addEventListener("click", closePortCheckModal);
+$("btnPortCheckRun").addEventListener("click", runPortCheck);
+$("btnFtpConnect").addEventListener("click", ftpConnect);
+$("btnFtpDisconnect").addEventListener("click", ftpDisconnect);
+$("ftpSavedAccounts").addEventListener("change", onFtpSavedAccountChange);
+$("btnFtpDeleteAccount").addEventListener("click", onFtpDeleteAccount);
+$("btnFtpLocalUp").addEventListener("click", ftpLocalUp);
+$("btnFtpLocalRefresh").addEventListener("click", () => loadFtpLocal(ftpLocalCwd));
+$("btnFtpRemoteUp").addEventListener("click", ftpRemoteUp);
+$("btnFtpRemoteRefresh").addEventListener("click", () => loadFtpRemote(ftpRemoteCwd));
+$("btnFtpUpload").addEventListener("click", ftpUpload);
+$("btnFtpDownload").addEventListener("click", ftpDownload);
+$("btnFtpClearTransfers").addEventListener("click", clearFtpTransfers);
+$("ftpCtxChmod").addEventListener("click", openChmodModal);
+$("btnChmodClose").addEventListener("click", closeChmodModal);
+$("btnCancelChmod").addEventListener("click", closeChmodModal);
+$("btnConfirmChmod").addEventListener("click", applyChmod);
+$("chmodModal").querySelector(".modal-backdrop").addEventListener("click", closeChmodModal);
+[
+  "chmodOwnerRead", "chmodOwnerWrite", "chmodOwnerExec",
+  "chmodGroupRead", "chmodGroupWrite", "chmodGroupExec",
+  "chmodOtherRead", "chmodOtherWrite", "chmodOtherExec",
+].forEach(id => {
+  $(id).addEventListener("change", updateChmodModeDisplay);
+});
+document.querySelectorAll(".ftp-chmod-presets button").forEach(btn => {
+  btn.addEventListener("click", () => applyChmodPreset(btn.dataset.preset));
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#ftpRemoteContextMenu")) hideFtpContextMenu();
+});
+rojoAPI.onFtpTransferProgress(updateFtpTransferProgress);
+rojoAPI.onFtpTransferDone(markFtpTransferDone);
+
+// Show/hide warning when switching to plain FTP
+$("ftpSecure").addEventListener("change", () => {
+  const mode = $("ftpSecure").value;
+  $("ftpWarning").style.display = mode === "ftp" ? "block" : "none";
+  $("ftpEncryptionInfo").style.display = (mode === "ftps" || mode === "sftp") ? "block" : "none";
+  // Auto-update default port when mode changes and port is empty or was a default
+  const curPort = $("ftpPort").value.trim();
+  const defaults = { ftp: "21", ftps: "990", sftp: "22" };
+  if (!curPort || Object.values(defaults).includes(curPort)) {
+    $("ftpPort").value = defaults[mode];
+  }
+});
+
 // ---------- Init ----------
 
 (async function init() {
@@ -1575,11 +2258,13 @@ $("btnVpnImport").addEventListener("click", async () => {
   console.log("[RO^JO] Download path:", dlPath);
   try {
     const def = await rojoAPI.checkIsDefault();
-    updateDefaultStar(def.magnet);
+    updateDefaultStar(def.isDefault);
   } catch (e) {
     console.warn("[RO^JO] checkIsDefault failed:", e);
   }
   updateTorrentElements();
   refreshVpnStatus();
   checkInternet();
+  // Show encryption info for default FTPS mode
+  $("ftpEncryptionInfo").style.display = "block";
 })();

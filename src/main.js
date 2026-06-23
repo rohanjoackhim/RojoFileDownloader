@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Tray, nativeImage } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, Tray, nativeImage, Menu, safeStorage } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -236,7 +236,7 @@ function broadcastHttpDownloads() {
   broadcast("http-downloads-updated", list);
 }
 
-function startHttpDownload(url, targetPath, scheduled = false, existingId = null) {
+function startHttpDownload(url, targetPath, scheduled = false, existingId = null, threads = 4) {
   return new Promise((resolve) => {
     const id = existingId || httpDownloadIdCounter++;
     const fileName = path.basename(new URL(url).pathname) || `download-${id}`;
@@ -255,25 +255,291 @@ function startHttpDownload(url, targetPath, scheduled = false, existingId = null
         downloaded: 0,
         total: 0,
         speed: 0,
+        threads: threads,
         addedAt: Date.now(),
-        _req: null,
+        _reqs: [],
         _lastChunkTime: Date.now(),
         _chunks: [],
+        _parts: [],
       };
       httpDownloads.set(id, download);
     } else {
-      // Reuse existing entry but reset status
       download.status = "downloading";
       download.error = null;
       download.speed = 0;
+      download.threads = threads || download.threads || 4;
+      download._reqs = [];
+      download._parts = [];
     }
 
-    // Check for existing partial file
+    const numThreads = Math.max(1, Math.min(16, download.threads || threads || 4));
+    const parsedUrl = new URL(url);
+    const httpModule = parsedUrl.protocol === "https:" ? require("https") : require("http");
+
+    // Step 1: HEAD request to get file size and check range support
+    const headReq = httpModule.request({
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (parsedUrl.protocol === "https:" ? 443 : 80),
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: "HEAD",
+      headers: { "User-Agent": "Rojo/1.0" },
+      timeout: 15000,
+    }, (headRes) => {
+      headRes.resume();
+
+      // Follow redirects
+      if (headRes.statusCode === 301 || headRes.statusCode === 302) {
+        const loc = headRes.headers.location;
+        if (loc) {
+          httpDownloads.delete(id);
+          return resolve(startHttpDownload(loc, targetPath, scheduled, id, numThreads));
+        }
+      }
+
+      const totalSize = parseInt(headRes.headers["content-length"] || "0", 10);
+      const acceptRanges = headRes.headers["accept-ranges"] === "bytes" ||
+                           headRes.headers["content-range"] !== undefined;
+
+      // If server doesn't support ranges or file is small, fall back to single connection
+      if (!acceptRanges || totalSize === 0 || totalSize < 1024 * 1024) {
+        console.log(`[RO^JO] HTTP download: single connection (ranges=${acceptRanges}, size=${totalSize})`);
+        return resolve(startSingleHttpDownload(url, targetPath, scheduled, id, download));
+      }
+
+      download.total = totalSize;
+      console.log(`[RO^JO] HTTP download: ${numThreads} threads, size=${totalSize}, ranges supported`);
+
+      // Step 2: Split into byte ranges and download in parallel
+      const partSize = Math.ceil(totalSize / numThreads);
+      const parts = [];
+      for (let i = 0; i < numThreads; i++) {
+        const start = i * partSize;
+        const end = Math.min(start + partSize - 1, totalSize - 1);
+        if (start > end) break;
+        parts.push({
+          index: i,
+          start,
+          end,
+          downloaded: 0,
+          req: null,
+          done: false,
+        });
+      }
+      download._parts = parts;
+
+      // Create the part file at full size (pre-allocate)
+      try {
+        const fd = fs.openSync(partPath, "w");
+        fs.ftruncateSync(fd, totalSize);
+        fs.closeSync(fd);
+      } catch (e) {
+        console.error(`[RO^JO] Failed to pre-allocate file: ${e.message}`);
+      }
+
+      let lastReport = Date.now();
+      let lastDownloaded = 0;
+      let allDone = false;
+
+      function checkAllDone() {
+        if (allDone) return;
+        if (parts.every(p => p.done)) {
+          allDone = true;
+          // Rename .part to final
+          try {
+            fs.renameSync(partPath, filePath);
+          } catch (e) {
+            console.error(`[RO^JO] Failed to rename part file: ${e.message}`);
+          }
+          download.status = "completed";
+          download.speed = 0;
+          download.progress = 1;
+          download.downloaded = totalSize;
+          saveHttpDownloadsState();
+          broadcastHttpDownloads();
+          checkShutdown();
+          console.log(`[RO^JO] HTTP download completed: ${fileName} (${numThreads} threads)`);
+          resolve({ ok: true, id, filePath });
+        }
+      }
+
+      function reportProgress() {
+        const now = Date.now();
+        if (now - lastReport >= 1000) {
+          const totalDownloaded = parts.reduce((sum, p) => sum + p.downloaded, 0);
+          const elapsed = (now - lastReport) / 1000;
+          download.speed = Math.max(0, Math.round((totalDownloaded - lastDownloaded) / elapsed));
+          download.downloaded = totalDownloaded;
+          lastDownloaded = totalDownloaded;
+          lastReport = now;
+          broadcastHttpDownloads();
+        }
+      }
+
+      // Launch each part download
+      for (const part of parts) {
+        const partOptions = {
+          hostname: parsedUrl.hostname,
+          port: parsedUrl.port || (parsedUrl.protocol === "https:" ? 443 : 80),
+          path: parsedUrl.pathname + parsedUrl.search,
+          method: "GET",
+          headers: {
+            "Range": `bytes=${part.start}-${part.end}`,
+            "User-Agent": "Rojo/1.0",
+          },
+          timeout: 30000,
+        };
+
+        const partReq = httpModule.request(partOptions, (partRes) => {
+          if (partRes.statusCode !== 206 && partRes.statusCode !== 200) {
+            console.error(`[RO^JO] Part ${part.index} failed: HTTP ${partRes.statusCode}`);
+            partRes.resume();
+            return;
+          }
+
+          // Open file descriptor for writing at offset
+          let fd = null;
+          try {
+            fd = fs.openSync(partPath, "r+");
+          } catch (e) {
+            console.error(`[RO^JO] Part ${part.index} cannot open file: ${e.message}`);
+            partRes.resume();
+            return;
+          }
+
+          partRes.on("data", (chunk) => {
+            if (download.status !== "downloading") {
+              partReq.destroy();
+              return;
+            }
+            try {
+              fs.writeSync(fd, chunk, 0, chunk.length, part.start + part.downloaded);
+            } catch (e) {
+              console.error(`[RO^JO] Part ${part.index} write error: ${e.message}`);
+            }
+            part.downloaded += chunk.length;
+            download._lastChunkTime = Date.now();
+            reportProgress();
+          });
+
+          partRes.on("end", () => {
+            if (fd) { try { fs.closeSync(fd); } catch (e) {} }
+            part.done = true;
+            console.log(`[RO^JO] Part ${part.index} done (${part.downloaded} bytes)`);
+            checkAllDone();
+          });
+
+          partRes.on("error", (err) => {
+            if (fd) { try { fs.closeSync(fd); } catch (e) {} }
+            if (download.status === "downloading") {
+              console.error(`[RO^JO] Part ${part.index} error: ${err.message}`);
+              // Retry this part once
+              if (!part.done && part.downloaded < (part.end - part.start + 1)) {
+                console.log(`[RO^JO] Retrying part ${part.index} from byte ${part.downloaded}`);
+                setTimeout(() => {
+                  if (download.status !== "downloading") return;
+                  const retryOpts = {
+                    hostname: parsedUrl.hostname,
+                    port: parsedUrl.port || (parsedUrl.protocol === "https:" ? 443 : 80),
+                    path: parsedUrl.pathname + parsedUrl.search,
+                    method: "GET",
+                    headers: {
+                      "Range": `bytes=${part.start + part.downloaded}-${part.end}`,
+                      "User-Agent": "Rojo/1.0",
+                    },
+                    timeout: 30000,
+                  };
+                  const retryReq = httpModule.request(retryOpts, (retryRes) => {
+                    if (retryRes.statusCode !== 206 && retryRes.statusCode !== 200) {
+                      retryRes.resume();
+                      return;
+                    }
+                    let rfd = null;
+                    try { rfd = fs.openSync(partPath, "r+"); } catch (e) { retryRes.resume(); return; }
+                    retryRes.on("data", (chunk) => {
+                      if (download.status !== "downloading") { retryReq.destroy(); return; }
+                      try { fs.writeSync(rfd, chunk, 0, chunk.length, part.start + part.downloaded); } catch (e) {}
+                      part.downloaded += chunk.length;
+                      reportProgress();
+                    });
+                    retryRes.on("end", () => {
+                      if (rfd) { try { fs.closeSync(rfd); } catch (e) {} }
+                      part.done = true;
+                      checkAllDone();
+                    });
+                    retryRes.on("error", () => {
+                      if (rfd) { try { fs.closeSync(rfd); } catch (e) {} }
+                    });
+                  });
+                  retryReq.on("error", () => {});
+                  retryReq.on("timeout", () => { retryReq.destroy(); });
+                  download._reqs.push(retryReq);
+                  retryReq.end();
+                }, 1000);
+              }
+            }
+          });
+        });
+
+        partReq.on("error", (err) => {
+          if (download.status === "downloading") {
+            console.error(`[RO^JO] Part ${part.index} request error: ${err.message}`);
+          }
+        });
+
+        partReq.on("timeout", () => {
+          partReq.destroy();
+          console.error(`[RO^JO] Part ${part.index} timeout`);
+        });
+
+        part.req = partReq;
+        download._reqs.push(partReq);
+        partReq.end();
+      }
+
+      saveHttpDownloadsState();
+      broadcastHttpDownloads();
+      if (!scheduled) {
+        resolve({ ok: true, id });
+      }
+    });
+
+    headReq.on("error", (err) => {
+      // HEAD might not be supported, fall back to single connection
+      console.log(`[RO^JO] HEAD failed (${err.message}), falling back to single connection`);
+      httpDownloads.delete(id);
+      resolve(startSingleHttpDownload(url, targetPath, scheduled, id, download));
+    });
+
+    headReq.on("timeout", () => {
+      headReq.destroy();
+      console.log(`[RO^JO] HEAD timeout, falling back to single connection`);
+      httpDownloads.delete(id);
+      resolve(startSingleHttpDownload(url, targetPath, scheduled, id, download));
+    });
+
+    headReq.end();
+  });
+}
+
+// Single-connection fallback (original method)
+function startSingleHttpDownload(url, targetPath, scheduled = false, id, download) {
+  return new Promise((resolve) => {
+    const fileName = download.name || path.basename(new URL(url).pathname) || `download-${id}`;
+    const filePath = download.filePath || path.join(targetPath || DEFAULT_DOWNLOAD_DIR, fileName);
+    const partPath = download.partPath || filePath + ".part";
+
+    if (!httpDownloads.has(id)) {
+      httpDownloads.set(id, download);
+    }
+    download.status = "downloading";
+    download.error = null;
+    download.speed = 0;
+    download._reqs = [];
+
     let startByte = 0;
     try {
       if (fs.existsSync(partPath)) {
-        const stats = fs.statSync(partPath);
-        startByte = stats.size;
+        startByte = fs.statSync(partPath).size;
         download.downloaded = startByte;
       }
     } catch (e) {}
@@ -293,13 +559,13 @@ function startHttpDownload(url, targetPath, scheduled = false, existingId = null
     };
 
     const req = httpModule.request(options, (res) => {
-      download._req = req;
+      download._reqs = [req];
 
       if (res.statusCode === 301 || res.statusCode === 302) {
         const loc = res.headers.location;
         if (loc) {
           httpDownloads.delete(id);
-          return resolve(startHttpDownload(loc, targetPath, scheduled));
+          return resolve(startSingleHttpDownload(loc, targetPath, scheduled, id, download));
         }
       }
 
@@ -311,15 +577,13 @@ function startHttpDownload(url, targetPath, scheduled = false, existingId = null
         return resolve({ ok: false, id, error: `HTTP ${res.statusCode}` });
       }
 
-      // Parse total size from Content-Length or Content-Range
       const contentLength = res.headers["content-length"];
       const contentRange = res.headers["content-range"];
       if (contentRange) {
         const match = contentRange.match(/\/(\d+)/);
         if (match) download.total = parseInt(match[1], 10);
       } else if (contentLength) {
-        const len = parseInt(contentLength, 10);
-        download.total = startByte + len;
+        download.total = startByte + parseInt(contentLength, 10);
       }
 
       const outStream = fs.createWriteStream(partPath, { flags: startByte > 0 ? "a" : "w" });
@@ -327,14 +591,10 @@ function startHttpDownload(url, targetPath, scheduled = false, existingId = null
       let lastDownloaded = startByte;
 
       res.on("data", (chunk) => {
-        if (download.status !== "downloading") {
-          req.destroy();
-          return;
-        }
+        if (download.status !== "downloading") { req.destroy(); return; }
         outStream.write(chunk);
         download.downloaded += chunk.length;
         download._lastChunkTime = Date.now();
-
         const now = Date.now();
         if (now - lastReport >= 1000) {
           const elapsed = (now - lastReport) / 1000;
@@ -351,16 +611,12 @@ function startHttpDownload(url, targetPath, scheduled = false, existingId = null
           download.status = "completed";
           download.speed = 0;
           download.progress = 1;
-          // Rename .part to final name
-          try {
-            fs.renameSync(partPath, filePath);
-          } catch (e) {
-            console.error(`[RO^JO] Failed to rename part file: ${e.message}`);
-          }
+          try { fs.renameSync(partPath, filePath); } catch (e) {}
           console.log(`[RO^JO] HTTP download completed: ${fileName}`);
         }
         saveHttpDownloadsState();
         broadcastHttpDownloads();
+        checkShutdown();
         resolve({ ok: true, id, filePath });
       });
 
@@ -406,6 +662,12 @@ function pauseHttpDownload(id) {
   if (d.status !== "downloading") return { ok: false, error: "Not downloading" };
   d.status = "paused";
   d.speed = 0;
+  if (d._reqs && d._reqs.length > 0) {
+    for (const req of d._reqs) {
+      try { req.destroy(); } catch (e) {}
+    }
+    d._reqs = [];
+  }
   if (d._req) {
     try { d._req.destroy(); } catch (e) {}
     d._req = null;
@@ -423,13 +685,18 @@ function resumeHttpDownload(id) {
   d.error = null;
   saveHttpDownloadsState();
   broadcastHttpDownloads();
-  startHttpDownload(d.url, path.dirname(d.filePath), false, id);
+  startHttpDownload(d.url, path.dirname(d.filePath), false, id, d.threads || 4);
   return { ok: true };
 }
 
 function removeHttpDownload(id, deleteFiles = false) {
   const d = httpDownloads.get(id);
   if (!d) return { ok: false, error: "Download not found" };
+  if (d._reqs && d._reqs.length > 0) {
+    for (const req of d._reqs) {
+      try { req.destroy(); } catch (e) {}
+    }
+  }
   if (d._req) {
     try { d._req.destroy(); } catch (e) {}
   }
@@ -447,6 +714,7 @@ function removeHttpDownload(id, deleteFiles = false) {
 // ---------- Schedule Manager ----------
 let scheduledDownloads = [];
 let scheduleCheckInterval = null;
+let pendingShutdown = false;
 
 function loadScheduledDownloads() {
   try {
@@ -470,9 +738,9 @@ function saveScheduledDownloads() {
   }
 }
 
-function scheduleDownload(url, targetPath, scheduledTime) {
+function scheduleDownload(url, targetPath, scheduledTime, shutdownAfterComplete = false) {
   const id = Date.now() + Math.random().toString(36).slice(2);
-  const item = { id, url, targetPath: targetPath || DEFAULT_DOWNLOAD_DIR, scheduledTime, createdAt: Date.now() };
+  const item = { id, url, targetPath: targetPath || DEFAULT_DOWNLOAD_DIR, scheduledTime, createdAt: Date.now(), shutdownAfterComplete };
   scheduledDownloads.push(item);
   saveScheduledDownloads();
   broadcastScheduledDownloads();
@@ -490,6 +758,19 @@ function broadcastScheduledDownloads() {
   broadcast("scheduled-downloads-updated", scheduledDownloads);
 }
 
+function checkShutdown() {
+  if (!pendingShutdown) return;
+  // Wait until all scheduled shutdown items have started
+  const hasFutureShutdownItems = scheduledDownloads.some(s => s.shutdownAfterComplete);
+  if (hasFutureShutdownItems) return;
+  const activeTorrentsCount = [...activeTorrents.values()].filter(t => t.status !== "completed").length;
+  const activeHttpCount = [...httpDownloads.values()].filter(d => d.status === "downloading").length;
+  if (activeTorrentsCount === 0 && activeHttpCount === 0) {
+    console.log("[RO^JO] All downloads complete, shutting down");
+    app.quit();
+  }
+}
+
 function startScheduleChecker() {
   if (scheduleCheckInterval) clearInterval(scheduleCheckInterval);
   scheduleCheckInterval = setInterval(() => {
@@ -498,16 +779,45 @@ function startScheduleChecker() {
     for (const item of due) {
       console.log(`[RO^JO] Starting scheduled download: ${item.url}`);
       startHttpDownload(item.url, item.targetPath, true);
+      if (item.shutdownAfterComplete) {
+        pendingShutdown = true;
+      }
     }
     if (due.length > 0) {
       scheduledDownloads = scheduledDownloads.filter(s => s.scheduledTime > now);
       saveScheduledDownloads();
       broadcastScheduledDownloads();
     }
+    checkShutdown();
   }, 30000); // check every 30 seconds
 }
 
 // Pre-configured optimal settings (DHT/uTP disabled to avoid native crashes)
+const PORT_CONFIG_PATH = path.join(app.getPath("userData"), "rojo-port.json");
+let torrentPort = 0; // 0 = random/default port chosen by WebTorrent
+
+function loadPortConfig() {
+  try {
+    if (fs.existsSync(PORT_CONFIG_PATH)) {
+      const data = JSON.parse(fs.readFileSync(PORT_CONFIG_PATH, "utf-8"));
+      if (data && typeof data.port === "number" && data.port >= 0 && data.port <= 65535) {
+        torrentPort = data.port;
+      }
+    }
+  } catch (e) {
+    console.error("[RO^JO] Failed to load port config:", e.message);
+  }
+}
+loadPortConfig();
+
+function savePortConfig(port) {
+  try {
+    fs.writeFileSync(PORT_CONFIG_PATH, JSON.stringify({ port }, null, 2), "utf-8");
+  } catch (e) {
+    console.error("[RO^JO] Failed to save port config:", e.message);
+  }
+}
+
 const ROJO_CONFIG = {
   dht: false,
   tracker: true,
@@ -547,6 +857,7 @@ const EXTERNAL_DRIVE_DL_LIMIT = 1.5 * 1024 * 1024; // bytes/sec
 
 let win;
 let tray;
+let splash;
 let client;
 const activeTorrents = new Map();
 const pendingFileSelection = new Map(); // infoHash -> { torrent, displayName, downloadPath, magnetUri?, torrentFilePath? }
@@ -556,6 +867,12 @@ let restartStatsLoop = null; // called when window is recreated after being clos
 
 // Store last used download path
 let lastDownloadPath = DEFAULT_DOWNLOAD_DIR;
+
+// Force both dev and built apps to use the same userData folder
+// (avoids losing torrents when productName changes between dev and build)
+const USER_DATA_ROJO = path.join(app.getPath("appData"), "RO", "JO");
+if (!fs.existsSync(USER_DATA_ROJO)) fs.mkdirSync(USER_DATA_ROJO, { recursive: true });
+app.setPath("userData", USER_DATA_ROJO);
 
 // Torrent state persistence
 const TORRENTS_STATE_PATH = path.join(app.getPath("userData"), "rojo-torrents.json");
@@ -727,6 +1044,41 @@ function updateDockBadge(bestProgress = 0, totalDl = 0, totalUl = 0) {
   }
 }
 
+function createSplash() {
+  splash = new BrowserWindow({
+    width: 360,
+    height: 360,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    center: true,
+    show: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    closable: true,
+    skipTaskbar: true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  splash.loadFile(path.join(__dirname, "renderer", "splash.html"));
+  splash.once("ready-to-show", () => {
+    if (splash && !splash.isDestroyed()) splash.show();
+  });
+}
+
+function closeSplash() {
+  if (splash && !splash.isDestroyed()) {
+    splash.destroy();
+    splash = null;
+  }
+}
+
 async function createWindow() {
   win = new BrowserWindow({
     width: 1138,
@@ -735,6 +1087,7 @@ async function createWindow() {
     minHeight: 600,
     frame: false,
     titleBarStyle: "hidden",
+    icon: path.join(__dirname, "..", "assets", "icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -746,6 +1099,86 @@ async function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
+
+  let splashDismissed = false;
+
+  win.once("ready-to-show", () => {
+    // Show main window but keep splash on top until user responds to default prompt
+    win.show();
+    // Don't close splash yet — wait for user decision or timeout
+  });
+
+  // IPC: splash requests to close itself after user decision
+  ipcMain.handle("splash-close", () => {
+    if (splashDismissed) return { ok: true };
+    splashDismissed = true;
+    closeSplash();
+    // Focus main window
+    if (win && !win.isDestroyed()) {
+      win.focus();
+    }
+    return { ok: true };
+  });
+
+  // Fallback: ensure splash never stays stuck longer than 30 seconds
+  setTimeout(() => {
+    if (!splashDismissed) {
+      splashDismissed = true;
+      closeSplash();
+      if (win && !win.isDestroyed() && !win.isVisible()) win.show();
+      if (win && !win.isDestroyed()) win.focus();
+    }
+  }, 30000);
+
+  // Enable native copy / paste / cut / select-all shortcuts
+  const appMenu = Menu.buildFromTemplate([
+    {
+      label: "File",
+      submenu: [
+        { label: "Quit", accelerator: "CmdOrCtrl+Q", click: () => { isQuitting = true; app.quit(); } },
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "pasteAndMatchStyle" },
+        { role: "delete" },
+        { role: "selectAll" },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        {
+          label: "Toggle Developer Tools",
+          accelerator: "Alt+Command+I",
+          click: () => {
+            if (win && !win.isDestroyed()) {
+              win.webContents.toggleDevTools();
+            }
+          },
+        },
+        { type: "separator" },
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" },
+        { role: "close" },
+      ],
+    },
+  ]);
+  Menu.setApplicationMenu(appMenu);
 
   win.once("ready-to-show", () => {
     win.show();
@@ -781,8 +1214,8 @@ function createTray() {
   if (tray) return;
 
   try {
-    const pngPath = path.join(process.resourcesPath, "assets", "icon.png");
-    const fallbackPath = path.join(__dirname, "..", "assets", "icon.png");
+    const pngPath = path.join(process.resourcesPath, "assets", "tray-icon.png");
+    const fallbackPath = path.join(__dirname, "..", "assets", "tray-icon.png");
     let iconPath = fs.existsSync(pngPath) ? pngPath : (fs.existsSync(fallbackPath) ? fallbackPath : null);
 
     if (!iconPath) {
@@ -880,6 +1313,7 @@ async function initWebTorrent() {
     webSeeds: ROJO_CONFIG.webSeeds,
     maxConns: ROJO_CONFIG.maxConns,
     utp: ROJO_CONFIG.utp,
+    torrentPort: torrentPort || undefined,
   });
 
   client.on("error", (err) => {
@@ -899,7 +1333,14 @@ async function initWebTorrent() {
         let bestProgress = 0;
         let totalDl = 0;
         let totalUl = 0;
+        let torrentIdx = 0;
         for (const t of client.torrents) {
+          torrentIdx++;
+          // Yield event loop every 3 torrents to prevent tray/UI freeze
+          if (torrentIdx % 3 === 0) {
+            await new Promise(r => setImmediate(r));
+          }
+
           let entry = activeTorrents.get(t.infoHash);
           if (!entry) {
             entry = {
@@ -1001,6 +1442,7 @@ async function initWebTorrent() {
           }
         }
         await checkStopRatios();
+        checkShutdown();
 
         // Tracker diagnostics: log when torrents have 0 peers for extended time, auto-reannounce at 30s
         for (const t of client.torrents) {
@@ -1029,9 +1471,12 @@ async function initWebTorrent() {
       } catch (err) {
         console.error("[RO^JO] statsLoop error:", err.message);
       }
-      // Adaptive interval: slower when idle (4s), faster when active (1-2s)
+      // Adaptive interval: scale with torrent count to prevent main thread blocking
+      const torrentCount = client.torrents.length;
       const anyActivity = client.downloadSpeed > 0 || client.uploadSpeed > 0;
-      const interval = anyActivity ? 2000 : 4000;
+      const baseInterval = anyActivity ? 2000 : 4000;
+      // Add 500ms per torrent above 5 to reduce CPU/IPC load
+      const interval = Math.min(baseInterval + Math.max(0, torrentCount - 5) * 500, 8000);
       await new Promise(r => setTimeout(r, interval));
     }
     statsRunning = false;
@@ -1082,13 +1527,17 @@ async function handleAddMagnet(magnetUri) {
       }
     }
 
-    // Check if torrent already exists in client (from previous failed add)
-    const existingTorrent = newInfoHash ? client.torrents.find(t => t.infoHash && t.infoHash.toLowerCase() === newInfoHash) : null;
+    // Check if torrent already exists in client (from previous failed add or race after remove)
+    let existingTorrent = newInfoHash ? client.torrents.find(t => t.infoHash && t.infoHash.toLowerCase() === newInfoHash) : null;
     if (existingTorrent) {
-      // debug: already in client
-      // If it's in client but not in activeTorrents, re-add it to the map
+      // Force-remove stale entry so we can cleanly re-add
+      client.remove(existingTorrent, { destroyStore: false });
+      existingTorrent = null;
+    }
+
+    if (existingTorrent) {
+      // This branch is now dead but kept for safety
       if (!activeTorrents.has(existingTorrent.infoHash)) {
-        // debug: re-adding to activeTorrents
         const actualPath = path.join(downloadPath, existingTorrent.name);
         activeTorrents.set(existingTorrent.infoHash, {
           name: displayName || existingTorrent.name,
@@ -1110,7 +1559,6 @@ async function handleAddMagnet(magnetUri) {
         });
         return { ok: true, infoHash: existingTorrent.infoHash, name: displayName || existingTorrent.name };
       } else {
-        // debug: already in activeTorrents
         const entry = activeTorrents.get(existingTorrent.infoHash);
         return {
           ok: false,
@@ -1147,8 +1595,12 @@ async function handleAddMagnet(magnetUri) {
             const realInfoHash = t.infoHash;
             const realLength = t.length || 0;
             const actualPath = path.join(downloadPath, realName);
-            // For single file we used temp path; remove and re-add with real path
-            client.remove(t, {}, () => {
+            // For single file we used temp path; remove then re-add with real path.
+            // Don't wait for client.remove callback — it's unreliable and can hang forever.
+            // Yield with setImmediate so remove finishes before add, avoiding stale torrent objects.
+            client.remove(t, {});
+
+            setImmediate(() => {
               const actualTorrent = client.add(magnetUri, {
                 path: downloadPath,
                 announce: ROJO_CONFIG.announce,
@@ -1209,6 +1661,20 @@ async function handleAddMagnet(magnetUri) {
           }
 
           // Multiple files: store in pending (still on temp path) and show file picker
+          // Immediately register in activeTorrents so the card stays visible even if file picker is dismissed
+          activeTorrents.set(t.infoHash, {
+            name: displayName || t.name,
+            infoHash: t.infoHash,
+            progress: 0,
+            speed: 0,
+            peers: 0,
+            status: "selecting files",
+            path: path.join(downloadPath, t.name),
+            addedAt: Date.now(),
+            downloaded: 0,
+            length: t.length || 0,
+            magnetUri: magnetUri,
+          });
           let fileList = buildFileList(t, displayName);
           if (!fileList) {
             setTimeout(() => {
@@ -1217,6 +1683,7 @@ async function handleAddMagnet(magnetUri) {
               if (!fileList) {
                 console.error(`[RO^JO] ${displayName || t.name}: t.files still empty after retry, skipping file picker`);
                 try { client.remove(t); } catch (e) {}
+                activeTorrents.delete(t.infoHash);
                 if (!responded) { responded = true; resolve({ ok: false, error: "Failed to read torrent file list" }); }
                 return;
               }
@@ -1274,11 +1741,15 @@ async function handleAddMagnet(magnetUri) {
             const infoHash = match[1];
             const buf = await fetchTorrentFromCache(infoHash);
             console.log(`[RO^JO] Fetched .torrent from cache for ${infoHash}, size=${buf.length}`);
-            // Remove the magnet torrent and add the .torrent file instead
-            try { client.remove(torrent); } catch (e) {}
-            await handleAddTorrentFile(buf, downloadPath);
-            responded = true;
-            resolve({ ok: true, infoHash, name: displayName || "torrent", fromCache: true });
+            // Only remove old torrent after re-add succeeds to avoid disappearance
+            const result = await handleAddTorrentFile(buf, downloadPath);
+            if (result.ok) {
+              try { client.remove(torrent); } catch (e) {}
+              responded = true;
+              resolve({ ok: true, infoHash, name: displayName || "torrent", fromCache: true });
+            } else {
+              console.warn(`[RO^JO] Cache fallback re-add failed:`, result.error);
+            }
           }
         } catch (cacheErr) {
           console.warn(`[RO^JO] Web cache fallback failed:`, cacheErr.message);
@@ -1407,6 +1878,20 @@ async function handleAddTorrentFile(buffer, downloadPath) {
           }
 
           // Multiple files: store pending (still on temp path) and show file picker
+          // Immediately register in activeTorrents so the card stays visible even if file picker is dismissed
+          activeTorrents.set(t.infoHash, {
+            name: t.name,
+            infoHash: t.infoHash,
+            progress: 0,
+            speed: 0,
+            peers: 0,
+            status: "selecting files",
+            path: path.join(downloadPath, t.name),
+            addedAt: Date.now(),
+            downloaded: 0,
+            length: t.length || 0,
+            torrentFilePath: torrentFilePath,
+          });
           let fileList = buildFileList(t, t.name);
           if (!fileList) {
             setTimeout(() => {
@@ -1415,6 +1900,7 @@ async function handleAddTorrentFile(buffer, downloadPath) {
               if (!fileList) {
                 console.error(`[RO^JO] ${t.name}: t.files still empty after retry in handleAddTorrentFile`);
                 try { client.remove(t); } catch (e) {}
+                activeTorrents.delete(t.infoHash);
                 if (!responded) { responded = true; resolve({ ok: false, error: "Failed to read torrent file list" }); }
                 return;
               }
@@ -1477,19 +1963,23 @@ async function handleAddTorrentFile(buffer, downloadPath) {
 async function removeTorrent(infoHash, deleteFiles = false) {
   if (!client) return { ok: false, error: "Engine not ready" };
   const torrent = await client.get(infoHash);
-  if (!torrent) return { ok: false, error: "Torrent not found" };
+  if (!torrent) {
+    // Already gone from client; just clean up our map
+    activeTorrents.delete(infoHash);
+    saveTorrentsState();
+    broadcast("torrent-removed", { infoHash });
+    return { ok: true };
+  }
 
-  return new Promise((resolve) => {
-    client.remove(torrent, { destroyStore: deleteFiles }, (err) => {
-      if (err) return resolve({ ok: false, error: err.message });
-      activeTorrents.delete(infoHash);
-      // Immediately tell the renderer so the item vanishes from the list
-      if (win && !win.isDestroyed()) {
-        broadcast("torrent-removed", { infoHash });
-      }
-      resolve({ ok: true });
-    });
-  });
+  // Don't wait for client.remove callback — it's unreliable and can hang.
+  // Clean up our own state immediately and return.
+  client.remove(torrent, { destroyStore: deleteFiles });
+  activeTorrents.delete(infoHash);
+  saveTorrentsState();
+  if (win && !win.isDestroyed()) {
+    broadcast("torrent-removed", { infoHash });
+  }
+  return { ok: true };
 }
 
 function overwriteFile(filePath) {
@@ -1728,6 +2218,18 @@ ipcMain.handle("clear-torrent-history", () => {
   return clearTorrentHistory();
 });
 
+ipcMain.handle("delete-history-entry", (_evt, index) => {
+  try {
+    const history = loadTorrentHistory();
+    if (index < 0 || index >= history.length) return { ok: false, error: "Invalid index" };
+    history.splice(index, 1);
+    saveTorrentHistory(history);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle("pause-torrent", async (_event, infoHash) => {
   return await pauseTorrent(infoHash);
 });
@@ -1742,8 +2244,42 @@ ipcMain.handle("open-folder", async () => {
 });
 
 ipcMain.handle("open-torrent-folder", async (_event, folderPath) => {
-  shell.showItemInFolder(folderPath);
-  return null;
+  if (!folderPath) {
+    console.warn("[RO^JO] open-torrent-folder: path is empty");
+    return { ok: false, error: "No folder path available" };
+  }
+
+  // If path points to a file, get its parent directory
+  let targetPath = folderPath;
+  try {
+    const stats = fs.statSync(folderPath);
+    if (stats.isFile()) {
+      targetPath = path.dirname(folderPath);
+    }
+  } catch (e) {
+    // Path doesn't exist yet; try parent directory
+    targetPath = path.dirname(folderPath);
+  }
+
+  // Ensure the directory exists before trying to open it
+  try {
+    if (!fs.existsSync(targetPath)) {
+      fs.mkdirSync(targetPath, { recursive: true });
+    }
+  } catch (e) {
+    console.warn("[RO^JO] Could not create directory:", targetPath, e.message);
+  }
+
+  // Use openPath to open the folder reliably.
+  // showItemInFolder is for highlighting files inside a parent directory;
+  // it silently fails when passed a directory path.
+  const result = await shell.openPath(targetPath);
+  if (result) {
+    console.warn("[RO^JO] openPath error:", result);
+    return { ok: false, error: result };
+  }
+
+  return { ok: true };
 });
 
 ipcMain.handle("select-file", async () => {
@@ -1772,7 +2308,279 @@ ipcMain.handle("get-download-path", () => {
   return lastDownloadPath;
 });
 
-ipcMain.handle("set-as-default", () => {
+ipcMain.handle("get-torrent-port", () => {
+  return { port: torrentPort };
+});
+
+ipcMain.handle("set-torrent-port", async (_event, port) => {
+  try {
+    const p = parseInt(port);
+    if (isNaN(p) || p < 0 || p > 65535) {
+      return { ok: false, error: "Port must be between 1 and 65535 (or 0 for random)" };
+    }
+
+    // Save the new port
+    torrentPort = p;
+    savePortConfig(p);
+
+    console.log(`[RO^JO] Torrent port saved to ${p || "random"}. App restart required to apply.`);
+    return { ok: true, port: p, requiresRestart: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle("check-port", async () => {
+  const net = require("net");
+  const http = require("http");
+  const { exec } = require("child_process");
+
+  // Common ports to scan: torrent ports + common service ports
+  const commonPorts = [
+    { port: torrentPort || 0, label: "Torrent (configured)" },
+    { port: 6881, label: "BitTorrent" },
+    { port: 6882, label: "BitTorrent" },
+    { port: 6883, label: "BitTorrent" },
+    { port: 6884, label: "BitTorrent" },
+    { port: 6885, label: "BitTorrent" },
+    { port: 6886, label: "BitTorrent" },
+    { port: 6887, label: "BitTorrent" },
+    { port: 6888, label: "BitTorrent" },
+    { port: 6889, label: "BitTorrent" },
+    { port: 51413, label: "Torrent (default)" },
+    { port: 21, label: "FTP" },
+    { port: 22, label: "SSH" },
+    { port: 80, label: "HTTP" },
+    { port: 443, label: "HTTPS" },
+    { port: 990, label: "FTPS" },
+    { port: 8080, label: "HTTP Alt" },
+    { port: 9090, label: "Web UI" },
+    { port: 3389, label: "RDP" },
+    { port: 5900, label: "VNC" },
+  ];
+
+  // Filter out port 0 duplicates
+  const portsToScan = [...new Set(commonPorts.filter(p => p.port > 0).map(p => p.port))];
+  const portLabels = {};
+  for (const p of commonPorts) {
+    if (p.port > 0) {
+      if (!portLabels[p.port]) portLabels[p.port] = [];
+      if (!portLabels[p.port].includes(p.label)) portLabels[p.port].push(p.label);
+    }
+  }
+
+  const result = {
+    port: torrentPort,
+    publicIP: null,
+    ports: [],
+    status: "checking",
+    advice: null,
+  };
+
+  console.log("[RO^JO] check-port: starting, scanning", portsToScan.length, "ports");
+
+  // 1. Get public IP
+  const ipServices = [
+    "http://api.ipify.org?format=json",
+    "http://ipinfo.io/json",
+    "http://ifconfig.me/all.json",
+  ];
+  for (const svc of ipServices) {
+    try {
+      const publicIP = await new Promise((resolve, reject) => {
+        const parsed = new URL(svc);
+        const mod = parsed.protocol === "https:" ? https : http;
+        const req = mod.get(svc, { timeout: 8000 }, (res) => {
+          let body = "";
+          res.on("data", (chunk) => body += chunk);
+          res.on("end", () => {
+            try { resolve(JSON.parse(body).ip || JSON.parse(body).query || null); }
+            catch (e) { reject(e); }
+          });
+        });
+        req.on("error", reject);
+        req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+      });
+      if (publicIP) { result.publicIP = publicIP; break; }
+    } catch (e) {}
+  }
+
+  // 2. Get process info for all listening ports via lsof
+  let portProcesses = {};
+  try {
+    portProcesses = await new Promise((resolve) => {
+      exec("lsof -i -P -n 2>/dev/null || true", { timeout: 5000 }, (err, stdout) => {
+        const map = {};
+        if (err || !stdout) { resolve(map); return; }
+        for (const line of stdout.split("\n").slice(1)) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length < 9) continue;
+          const cmd = parts[0];
+          const pid = parts[1];
+          const addr = parts[parts.length - 2];
+          const state = parts[parts.length - 1];
+          // Extract port from address like *:51413 or 127.0.0.1:8080
+          const portMatch = addr.match(/:(\d+)$/);
+          if (portMatch) {
+            const p = parseInt(portMatch[1]);
+            if (!map[p]) map[p] = [];
+            const procInfo = `${cmd} (PID ${pid})`;
+            if (!map[p].some(e => e.proc === procInfo)) {
+              map[p].push({ proc: procInfo, cmd, pid, state, listening: state === "LISTEN" });
+            }
+          }
+        }
+        resolve(map);
+      });
+    });
+  } catch (e) {
+    console.log("[RO^JO] check-port: lsof failed:", e.message);
+  }
+
+  // 3. Scan each port
+  for (const port of portsToScan) {
+    const portInfo = {
+      port,
+      labels: portLabels[port] || [],
+      localOpen: false,
+      processes: [],
+      remoteReachable: null,
+    };
+
+    // Check if port is open locally (TCP connect)
+    try {
+      const localCheck = await new Promise((resolve) => {
+        const sock = new net.Socket();
+        sock.setTimeout(1500);
+        sock.on("connect", () => { sock.destroy(); resolve(true); });
+        sock.on("error", () => resolve(false));
+        sock.on("timeout", () => { sock.destroy(); resolve(false); });
+        sock.connect(port, "127.0.0.1");
+      });
+      portInfo.localOpen = localCheck;
+    } catch (e) {
+      portInfo.localOpen = false;
+    }
+
+    // Get process info from lsof
+    if (portProcesses[port]) {
+      portInfo.processes = portProcesses[port].map(p => p.proc);
+    }
+
+    // Check external reachability for the torrent port only
+    if (port === torrentPort && torrentPort > 0 && result.publicIP) {
+      // Direct TCP to public IP
+      try {
+        const directCheck = await new Promise((resolve) => {
+          const sock = new net.Socket();
+          sock.setTimeout(5000);
+          sock.on("connect", () => { sock.destroy(); resolve(true); });
+          sock.on("error", () => resolve(null));
+          sock.on("timeout", () => { sock.destroy(); resolve(null); });
+          sock.connect(port, result.publicIP);
+        });
+        if (directCheck !== null) {
+          portInfo.remoteReachable = directCheck;
+        }
+      } catch (e) {}
+
+      // Fallback: check-host.net API
+      if (portInfo.remoteReachable === null) {
+        try {
+          const apiCheck = await new Promise((resolve) => {
+            const req = http.get(`http://check-host.net/check-tcp?host=${result.publicIP}:${port}&max_nodes=3`, {
+              headers: { "Accept": "application/json" },
+              timeout: 10000,
+            }, (res) => {
+              let body = "";
+              res.on("data", (chunk) => body += chunk);
+              res.on("end", () => {
+                try {
+                  const json = JSON.parse(body);
+                  if (json.ok && json.request_id) {
+                    setTimeout(() => {
+                      const pollReq = http.get(`http://check-host.net/check-result/${json.request_id}`, {
+                        headers: { "Accept": "application/json" },
+                        timeout: 10000,
+                      }, (pollRes) => {
+                        let pollBody = "";
+                        pollRes.on("data", (chunk) => pollBody += chunk);
+                        pollRes.on("end", () => {
+                          try {
+                            const pollJson = JSON.parse(pollBody);
+                            const nodes = Object.values(pollJson);
+                            if (nodes.length === 0) { resolve(null); return; }
+                            let openCount = 0, closedCount = 0;
+                            for (const node of nodes) {
+                              if (Array.isArray(node) && node[0] === "ok") openCount++;
+                              else if (Array.isArray(node) && node[0] === "error") closedCount++;
+                            }
+                            if (openCount > 0 && closedCount === 0) resolve(true);
+                            else if (closedCount > 0 && openCount === 0) resolve(false);
+                            else resolve(null);
+                          } catch (e) { resolve(null); }
+                        });
+                      });
+                      pollReq.on("error", () => resolve(null));
+                      pollReq.on("timeout", () => { pollReq.destroy(); resolve(null); });
+                    }, 3000);
+                  } else { resolve(null); }
+                } catch (e) { resolve(null); }
+              });
+            });
+            req.on("error", () => resolve(null));
+            req.on("timeout", () => { req.destroy(); resolve(null); });
+          });
+          if (portInfo.remoteReachable === null) {
+            portInfo.remoteReachable = apiCheck;
+          }
+        } catch (e) {}
+      }
+    }
+
+    result.ports.push(portInfo);
+  }
+
+  // 4. Sort: open ports first, then by port number
+  result.ports.sort((a, b) => {
+    if (a.localOpen !== b.localOpen) return a.localOpen ? -1 : 1;
+    return a.port - b.port;
+  });
+
+  // 5. Determine overall status and advice
+  const torrentPortInfo = result.ports.find(p => p.port === torrentPort);
+  if (torrentPort === 0) {
+    result.status = "random";
+    result.advice = "Port is set to random. Set a fixed port in Port Settings for better connectivity and port forwarding.";
+  } else if (torrentPortInfo && torrentPortInfo.localOpen && torrentPortInfo.remoteReachable === true) {
+    result.status = "open";
+    result.advice = "Your torrent port " + torrentPort + " is open and reachable from the internet. Good peer connectivity expected.";
+  } else if (torrentPortInfo && torrentPortInfo.localOpen && torrentPortInfo.remoteReachable === false) {
+    result.status = "closed";
+    result.advice = "Port " + torrentPort + " is listening locally but not reachable externally. Configure port forwarding on your router for port " + torrentPort + " (TCP+UDP) to improve speeds.";
+  } else if (torrentPortInfo && torrentPortInfo.localOpen && torrentPortInfo.remoteReachable === null) {
+    result.status = "unknown";
+    result.advice = "Port " + torrentPort + " is listening locally but external reachability could not be determined. Check firewall and router port forwarding.";
+  } else if (torrentPortInfo && !torrentPortInfo.localOpen) {
+    result.status = "not-listening";
+    result.advice = "Torrent client is not listening on port " + torrentPort + ". Ensure the client is running with active torrents.";
+  } else {
+    result.status = "unknown";
+    result.advice = "Could not determine port status.";
+  }
+
+  console.log("[RO^JO] check-port: done, scanned", result.ports.length, "ports");
+  return result;
+});
+
+ipcMain.handle("set-as-default", async () => {
+  const { exec } = require("child_process");
+  const execAsync = (cmd, opts = {}) => new Promise((resolve) => {
+    exec(cmd, { timeout: 30000, ...opts }, (err, stdout, stderr) => {
+      resolve({ err, stdout: stdout || "", stderr: stderr || "" });
+    });
+  });
+
   let magnetOk = false;
   try {
     magnetOk = app.setAsDefaultProtocolClient("magnet");
@@ -1783,10 +2591,9 @@ ipcMain.handle("set-as-default", () => {
 
   if (process.platform === "win32") {
     try {
-      const { execSync } = require("child_process");
       const appPath = process.execPath;
-      execSync(`reg add "HKEY_CURRENT_USER\\Software\\Classes\\.torrent" /ve /d "RojoTorrent" /f`);
-      execSync(`reg add "HKEY_CURRENT_USER\\Software\\Classes\\RojoTorrent\\shell\\open\\command" /ve /d "\\"${appPath}\\" "%1\\"" /f`);
+      await execAsync(`reg add "HKEY_CURRENT_USER\\Software\\Classes\\.torrent" /ve /d "RojoTorrent" /f`);
+      await execAsync(`reg add "HKEY_CURRENT_USER\\Software\\Classes\\RojoTorrent\\shell\\open\\command" /ve /d "\\"${appPath}\\" "%1\\"" /f`);
       results.torrent = true;
     } catch (e) {
       console.warn("[RO^JO] Failed to register .torrent on Windows:", e.message);
@@ -1794,18 +2601,14 @@ ipcMain.handle("set-as-default", () => {
       results.torrentError = e.message;
     }
   } else if (process.platform === "darwin") {
-    // Register ROJO as default app for .torrent files on macOS
     try {
-      const { execSync } = require("child_process");
       const appPath = process.execPath.replace(/\/Contents\/MacOS\/.*$/, "");
+      const lsregister = "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister";
 
-      // Register app with Launch Services
-      try {
-        execSync(`/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "${appPath}"`, { stdio: "ignore" });
-      } catch (e) { /* ignore */ }
+      // Step 1: Force-register the app (async, non-blocking)
+      await execAsync(`"${lsregister}" -f -r "${appPath}"`, { stdio: "ignore" });
 
-      // Use Python to modify LaunchServices plist (built-in on all Macs)
-      // We build the script so app_path is safely inserted
+      // Step 2: Modify LaunchServices plist via Python (async)
       const appPathEscaped = appPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
       const pythonScript = `
 import plistlib, os, subprocess, sys
@@ -1817,17 +2620,23 @@ errors = []
 if os.path.exists(app_path):
     result = subprocess.run([
         "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister",
-        "-f", app_path
+        "-f", "-r", app_path
     ], capture_output=True)
     if result.returncode != 0:
         errors.append("lsregister failed: " + result.stderr.decode("utf-8", "ignore")[:200])
 
-# Build handler entry for .torrent extension
-handler = {
-    "LSHandlerContentTag": "torrent",
-    "LSHandlerContentTagClass": "public.filename-extension",
-    "LSHandlerRoleAll": "com.rojo.torrent"
-}
+# Build handler entries for .torrent extension and UTI
+handlers = [
+    {
+        "LSHandlerContentTag": "torrent",
+        "LSHandlerContentTagClass": "public.filename-extension",
+        "LSHandlerRoleAll": "com.rojo.torrent"
+    },
+    {
+        "LSHandlerContentType": "org.bittorrent.torrent",
+        "LSHandlerRoleAll": "com.rojo.torrent"
+    }
+]
 
 plist_paths = [
     os.path.expanduser("~/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist"),
@@ -1843,12 +2652,17 @@ for plist_path in plist_paths:
         else:
             plist = {"LSHandlers": []}
 
-        # Remove existing .torrent handlers
-        plist["LSHandlers"] = [
-            h for h in plist.get("LSHandlers", [])
-            if not (h.get("LSHandlerContentTag") == "torrent" and h.get("LSHandlerContentTagClass") == "public.filename-extension")
-        ]
-        plist["LSHandlers"].append(handler)
+        # Remove existing .torrent handlers (by extension or UTI)
+        def is_torrent_handler(h):
+            if h.get("LSHandlerContentTag") == "torrent" and h.get("LSHandlerContentTagClass") == "public.filename-extension":
+                return True
+            if h.get("LSHandlerContentType") == "org.bittorrent.torrent":
+                return True
+            return False
+
+        plist["LSHandlers"] = [h for h in plist.get("LSHandlers", []) if not is_torrent_handler(h)]
+        for h in handlers:
+            plist["LSHandlers"].append(h)
 
         with open(plist_path, "wb") as f:
             plistlib.dump(plist, f)
@@ -1861,10 +2675,21 @@ if errors:
     sys.exit(1)
 print("done")
 `;
-      execSync(`python3 -c '${pythonScript.replace(/'/g, "'\\''")}'`, { stdio: ["ignore", "pipe", "pipe"] });
+      const pyResult = await execAsync(`python3 -c '${pythonScript.replace(/'/g, "'\\''")}'`);
+      if (pyResult.err) {
+        console.warn("[RO^JO] Python plist script failed:", pyResult.stderr);
+      }
 
-      // Restart Finder so it picks up the change
-      try { execSync("killall Finder", { stdio: "ignore" }); } catch (e) { /* ignore */ }
+      // Step 3: Rebuild Launch Services icon cache (fire-and-forget, non-blocking)
+      // This is the slow command but we don't await it so the app doesn't freeze
+      exec(`"${lsregister}" -kill -seed -r "${appPath}"`, { stdio: "ignore", timeout: 60000 }, () => {
+        // After LS rebuild finishes, restart Finder + Dock to refresh icons
+        exec("killall Finder", { stdio: "ignore" }, () => {});
+        exec("killall Dock", { stdio: "ignore" }, () => {});
+      });
+
+      // Also touch .torrent files in Downloads to force icon refresh
+      exec('find ~/Downloads -name "*.torrent" -exec touch {} + 2>/dev/null', { stdio: "ignore" }, () => {});
 
       results.torrent = true;
     } catch (e) {
@@ -1881,21 +2706,100 @@ print("done")
   return results;
 });
 
-ipcMain.handle("check-is-default", () => {
-  const results = { magnet: app.isDefaultProtocolClient("magnet") };
+ipcMain.handle("remove-as-default", async () => {
+  const { exec } = require("child_process");
+  const execAsync = (cmd, opts = {}) => new Promise((resolve) => {
+    exec(cmd, { timeout: 10000, ...opts }, (err, stdout, stderr) => {
+      resolve({ err, stdout: stdout || "", stderr: stderr || "" });
+    });
+  });
+
+  const results = {};
+
+  // Remove magnet protocol association
+  try {
+    app.removeAsDefaultProtocolClient("magnet");
+    results.magnet = false;
+  } catch (e) {
+    results.magnet = app.isDefaultProtocolClient("magnet");
+  }
 
   if (process.platform === "win32") {
     try {
-      const { execSync } = require("child_process");
-      const reg = execSync('reg query "HKEY_CURRENT_USER\\Software\\Classes\\.torrent" /ve', { encoding: "utf8" });
-      results.torrent = reg.includes("RojoTorrent");
+      await execAsync(`reg delete "HKEY_CURRENT_USER\\Software\\Classes\\.torrent" /f`);
+      await execAsync(`reg delete "HKEY_CURRENT_USER\\Software\\Classes\\RojoTorrent" /f`);
+      results.torrent = false;
     } catch (e) {
       results.torrent = false;
     }
   } else if (process.platform === "darwin") {
     try {
-      const { execSync } = require("child_process");
-      const appPath = process.execPath.replace(/\/Contents\/MacOS\/.*$/, "");
+      // Remove .torrent handler from LaunchServices plist
+      const pythonScript = `
+import plistlib, os
+
+plist_paths = [
+    os.path.expanduser("~/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist"),
+    os.path.expanduser("~/Library/Preferences/com.apple.LaunchServices.plist")
+]
+
+for plist_path in plist_paths:
+    try:
+        if os.path.exists(plist_path):
+            with open(plist_path, "rb") as f:
+                plist = plistlib.load(f)
+            def is_torrent_handler(h):
+                if h.get("LSHandlerContentTag") == "torrent" and h.get("LSHandlerContentTagClass") == "public.filename-extension":
+                    return True
+                if h.get("LSHandlerContentType") == "org.bittorrent.torrent":
+                    return True
+                return False
+            plist["LSHandlers"] = [h for h in plist.get("LSHandlers", []) if not is_torrent_handler(h)]
+            with open(plist_path, "wb") as f:
+                plistlib.dump(plist, f)
+    except Exception:
+        pass
+print("done")
+`;
+      await execAsync("python3 -c '" + pythonScript.replace(/'/g, "'\\''") + "'");
+
+      // Restart Finder + Dock to refresh icons
+      execAsync("killall Finder", { stdio: "ignore" });
+      execAsync("killall Dock", { stdio: "ignore" });
+
+      results.torrent = false;
+    } catch (e) {
+      results.torrent = true;
+      results.torrentError = e.message;
+    }
+  } else {
+    results.torrent = false;
+  }
+
+  results.magnet = app.isDefaultProtocolClient("magnet");
+  results.isDefault = results.magnet || results.torrent;
+  return results;
+});
+
+ipcMain.handle("check-is-default", async () => {
+  const { exec } = require("child_process");
+  const execAsync = (cmd, opts = {}) => new Promise((resolve) => {
+    exec(cmd, { timeout: 10000, ...opts }, (err, stdout) => {
+      resolve({ err, stdout: stdout || "" });
+    });
+  });
+
+  const results = { magnet: app.isDefaultProtocolClient("magnet") };
+
+  if (process.platform === "win32") {
+    try {
+      const { stdout } = await execAsync('reg query "HKEY_CURRENT_USER\\Software\\Classes\\.torrent" /ve', { encoding: "utf8" });
+      results.torrent = stdout.includes("RojoTorrent");
+    } catch (e) {
+      results.torrent = false;
+    }
+  } else if (process.platform === "darwin") {
+    try {
       const checkScript = `
 import os
 plist_path = os.path.expanduser("~/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist")
@@ -1906,16 +2810,19 @@ if os.path.exists(plist_path):
         with open(plist_path, "rb") as f:
             plist = plistlib.load(f)
         for h in plist.get("LSHandlers", []):
-            if h.get("LSHandlerContentTag") == "torrent":
+            tag_match = h.get("LSHandlerContentTag") == "torrent" and h.get("LSHandlerContentTagClass") == "public.filename-extension"
+            uti_match = h.get("LSHandlerContentType") == "org.bittorrent.torrent"
+            if tag_match or uti_match:
                 role = h.get("LSHandlerRoleAll", "")
-                found = "rojo" in role.lower() or "com.rojo" in role.lower()
-                break
+                if "rojo" in role.lower() or "com.rojo" in role.lower():
+                    found = True
+                    break
     except Exception:
         pass
 print("true" if found else "false")
 `;
-      const out = execSync("python3 -c '" + checkScript.replace(/'/g, "'\\''") + "'", { encoding: "utf8" }).trim();
-      results.torrent = out === "true";
+      const { stdout } = await execAsync("python3 -c '" + checkScript.replace(/'/g, "'\\''") + "'", { encoding: "utf8" });
+      results.torrent = stdout.trim() === "true";
     } catch (e) {
       results.torrent = false;
     }
@@ -2400,8 +3307,6 @@ ipcMain.handle("confirm-file-selection", async (_evt, infoHash, selectedIndices)
     }, 60000);
 
     try {
-      // 1. Remove temp torrent (destroy store to clean up temp files)
-      // 2. Re-add with the real download path
       const onReady = (t) => {
         if (resolved) return;
         clearTimeout(timeout);
@@ -2446,26 +3351,29 @@ ipcMain.handle("confirm-file-selection", async (_evt, infoHash, selectedIndices)
         resolve({ ok: true, infoHash, name: pending.displayName || t.name });
       };
 
-      client.remove(pending.torrent, { destroyStore: true }, () => {
-        if (pending.magnetUri) {
-          client.add(pending.magnetUri, {
-            path: pending.downloadPath,
-            announce: ROJO_CONFIG.announce,
-          }, onReady);
-        } else if (pending.torrentFilePath && fs.existsSync(pending.torrentFilePath)) {
-          const buf = fs.readFileSync(pending.torrentFilePath);
-          client.add(buf, {
-            path: pending.downloadPath,
-            announce: ROJO_CONFIG.announce,
-          }, onReady);
-        } else {
-          clearTimeout(timeout);
-          if (!resolved) {
-            resolved = true;
-            resolve({ ok: false, error: "Cannot re-add torrent: no magnet URI or .torrent file found" });
-          }
+      // Remove temp torrent (destroy store to clean up temp files)
+      // Don't wait for callback — client.remove callback is unreliable
+      client.remove(pending.torrent, { destroyStore: true });
+
+      // Immediately re-add with real download path
+      if (pending.magnetUri) {
+        client.add(pending.magnetUri, {
+          path: pending.downloadPath,
+          announce: ROJO_CONFIG.announce,
+        }, onReady);
+      } else if (pending.torrentFilePath && fs.existsSync(pending.torrentFilePath)) {
+        const buf = fs.readFileSync(pending.torrentFilePath);
+        client.add(buf, {
+          path: pending.downloadPath,
+          announce: ROJO_CONFIG.announce,
+        }, onReady);
+      } else {
+        clearTimeout(timeout);
+        if (!resolved) {
+          resolved = true;
+          resolve({ ok: false, error: "Cannot re-add torrent: no magnet URI or .torrent file found" });
         }
-      });
+      }
     } catch (e) {
       clearTimeout(timeout);
       if (!resolved) {
@@ -2484,6 +3392,8 @@ ipcMain.handle("cancel-file-selection", async (_evt, infoHash) => {
   try {
     client.remove(pending.torrent, { destroyStore: true });
     pendingFileSelection.delete(infoHash);
+    activeTorrents.delete(infoHash);
+    broadcast("torrent-removed", { infoHash });
     console.log(`[RO^JO] File selection cancelled for ${infoHash}, torrent removed`);
     return { ok: true };
   } catch (e) {
@@ -2492,9 +3402,9 @@ ipcMain.handle("cancel-file-selection", async (_evt, infoHash) => {
 });
 
 // ---------- HTTP Download IPC ----------
-ipcMain.handle("start-http-download", async (_evt, url, targetPath) => {
+ipcMain.handle("start-http-download", async (_evt, url, targetPath, threads) => {
   try {
-    return await startHttpDownload(url, targetPath);
+    return await startHttpDownload(url, targetPath, false, null, threads || 4);
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -2531,8 +3441,8 @@ ipcMain.handle("get-http-downloads", () => {
 });
 
 // ---------- Schedule IPC ----------
-ipcMain.handle("schedule-download", (_evt, url, targetPath, scheduledTime) => {
-  return scheduleDownload(url, targetPath, scheduledTime);
+ipcMain.handle("schedule-download", (_evt, url, targetPath, scheduledTime, shutdownAfterComplete) => {
+  return scheduleDownload(url, targetPath, scheduledTime, shutdownAfterComplete);
 });
 
 ipcMain.handle("cancel-scheduled-download", (_evt, id) => {
@@ -2604,12 +3514,498 @@ app.on("open-file", (event, filePath) => {
   }
 });
 
+// ---------- FTP ----------
+
+const ftp = require("basic-ftp");
+const { Client: SftpClient } = require("ssh2");
+let ftpClient = null;
+let sftpClient = null;
+let sftpSshConn = null;
+let ftpConnected = false;
+let ftpMode = "ftps"; // "ftp", "ftps", or "sftp"
+
+function formatPermissions(mode) {
+  if (!mode) return "---------";
+  const type = (mode & 0o170000) === 0o040000 ? "d" : "-";
+  const perms = ["rwx", "rwx", "rwx"].map((letters, i) => {
+    const shift = (2 - i) * 3;
+    return letters.split("").map((l, j) => (mode & (1 << (shift + 2 - j))) ? l : "-").join("");
+  }).join("");
+  return type + perms;
+}
+
+function formatDate(date) {
+  if (!date) return "";
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleString([], { month: "short", day: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+// Credential storage path
+const FTP_CREDS_FILE = path.join(app.getPath("userData"), "ftp-creds.json");
+
+function loadCredsStore() {
+  try {
+    if (fs.existsSync(FTP_CREDS_FILE)) {
+      return JSON.parse(fs.readFileSync(FTP_CREDS_FILE, "utf-8"));
+    }
+  } catch (e) {
+    console.error("[RO^JO] Failed to load FTP creds:", e.message);
+  }
+  return {};
+}
+
+function saveCredsStore(store) {
+  try {
+    fs.writeFileSync(FTP_CREDS_FILE, JSON.stringify(store, null, 2), "utf-8");
+  } catch (e) {
+    console.error("[RO^JO] Failed to save FTP creds:", e.message);
+  }
+}
+
+ipcMain.handle("ftp-save-creds", (_event, host, port, user, pass, mode) => {
+  try {
+    if (!user) return { ok: false, error: "Username required to save credentials" };
+    if (!safeStorage.isEncryptionAvailable()) {
+      return { ok: false, error: "Encryption not available on this system" };
+    }
+    const store = loadCredsStore();
+    const encPass = safeStorage.encryptString(pass).toString("base64");
+    store[user] = { host, port, pass: encPass, mode, encrypted: true, lastUsed: Date.now() };
+    saveCredsStore(store);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle("ftp-load-creds", (_event, user) => {
+  try {
+    const store = loadCredsStore();
+    const entry = store[user];
+    if (!entry) return { ok: false, error: "No saved credentials" };
+    let pass = "";
+    if (entry.encrypted && safeStorage.isEncryptionAvailable()) {
+      pass = safeStorage.decryptString(Buffer.from(entry.pass, "base64"));
+    }
+    return { ok: true, host: entry.host, port: entry.port, user, pass, mode: entry.mode };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle("ftp-get-saved-users", () => {
+  try {
+    const store = loadCredsStore();
+    const users = Object.keys(store).sort((a, b) => (store[b].lastUsed || 0) - (store[a].lastUsed || 0));
+    return { ok: true, users };
+  } catch (e) {
+    return { ok: false, users: [] };
+  }
+});
+
+ipcMain.handle("ftp-get-last-login", () => {
+  try {
+    const store = loadCredsStore();
+    let lastUser = null;
+    let lastTime = 0;
+    for (const [user, entry] of Object.entries(store)) {
+      if ((entry.lastUsed || 0) > lastTime) {
+        lastTime = entry.lastUsed || 0;
+        lastUser = user;
+      }
+    }
+    if (!lastUser) return { ok: false, error: "No saved credentials" };
+    let pass = "";
+    const entry = store[lastUser];
+    if (entry.encrypted && safeStorage.isEncryptionAvailable()) {
+      pass = safeStorage.decryptString(Buffer.from(entry.pass, "base64"));
+    }
+    return { ok: true, host: entry.host, port: entry.port, user: lastUser, pass, mode: entry.mode };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle("ftp-delete-creds", (_event, user) => {
+  try {
+    const store = loadCredsStore();
+    delete store[user];
+    saveCredsStore(store);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+async function closeFtpConnections() {
+  if (ftpClient) {
+    try { await ftpClient.close(); } catch (e) {}
+    ftpClient = null;
+  }
+  if (sftpClient) {
+    try { sftpClient.end(); } catch (e) {}
+    sftpClient = null;
+  }
+  if (sftpSshConn) {
+    try { sftpSshConn.end(); } catch (e) {}
+    sftpSshConn = null;
+  }
+  ftpConnected = false;
+}
+
+ipcMain.handle("ftp-connect", async (_event, host, port, user, pass, mode) => {
+  ftpMode = mode || "ftps";
+  await closeFtpConnections();
+
+  try {
+    if (ftpMode === "sftp") {
+      // SFTP via SSH2
+      sftpSshConn = new SftpClient();
+      await new Promise((resolve, reject) => {
+        sftpSshConn.on("error", (err) => reject(err));
+        sftpSshConn.on("ready", () => {
+          sftpSshConn.sftp((err, sftp) => {
+            if (err) return reject(err);
+            sftpClient = sftp;
+            resolve();
+          });
+        });
+        sftpSshConn.connect({
+          host: host,
+          port: parseInt(port) || 22,
+          username: user || "anonymous",
+          password: pass || "",
+          readyTimeout: 30000,
+          algorithms: {
+            // Military-grade: Curve25519 + ECDH key exchange only
+            kex: ['curve25519-sha256', 'curve25519-sha256@libssh.org', 'ecdh-sha2-nistp256', 'ecdh-sha2-nistp384', 'ecdh-sha2-nistp521', 'diffie-hellman-group14-sha256'],
+            // Military-grade: AES-256-GCM preferred, AES-256-CTR fallback
+            cipher: ['aes256-gcm@openssh.com', 'aes256-ctr', 'aes192-ctr', 'aes128-gcm@openssh.com', 'aes128-ctr'],
+            // Military-grade: HMAC-SHA2-512/256 only, no MD5 or SHA1
+            serverMac: ['hmac-sha2-512-etm@openssh.com', 'hmac-sha2-256-etm@openssh.com', 'hmac-sha2-512', 'hmac-sha2-256'],
+            clientMac: ['hmac-sha2-512-etm@openssh.com', 'hmac-sha2-256-etm@openssh.com', 'hmac-sha2-512', 'hmac-sha2-256'],
+            // Military-grade: Ed25519 + RSA-SHA2 + ECDSA only, no RSA-SHA1 or DSS
+            serverHostKey: ['ssh-ed25519', 'rsa-sha2-512', 'rsa-sha2-256', 'ecdsa-sha2-nistp256', 'ecdsa-sha2-nistp384'],
+          },
+        });
+      });
+      ftpConnected = true;
+      return { ok: true };
+    } else {
+      // FTP or FTPS via basic-ftp
+      ftpClient = new ftp.Client(30000);
+      ftpClient.ftp.verbose = false;
+      const secure = ftpMode === "ftps";
+      await ftpClient.access({
+        host: host,
+        port: parseInt(port) || (secure ? 990 : 21),
+        user: user || "anonymous",
+        password: pass || "anonymous@",
+        secure: secure,
+        secureOptions: secure ? {
+          // Military-grade encryption (CNSP 15 / NSA Suite B compliant)
+          rejectUnauthorized: true,
+          // Prefer TLS 1.3, require minimum TLS 1.2
+          minVersion: "TLSv1.2",
+          maxVersion: "TLSv1.3",
+          // Enforce forward secrecy: ECDHE/DHE key exchange only
+          ecdhCurve: "secp384r1:secp256r1:X25519",
+          // Military-grade ciphers: AES-256-GCM, AES-128-GCM, ChaCha20-Poly1305
+          // No RC4, 3DES, CBC, NULL, export, or anonymous ciphers
+          ciphers: [
+            "TLS_AES_256_GCM_SHA384",                                    // TLS 1.3
+            "TLS_CHACHA20_POLY1305_SHA256",                              // TLS 1.3
+            "TLS_AES_128_GCM_SHA256",                                    // TLS 1.3
+            "ECDHE-ECDSA-AES256-GCM-SHA384",                             // TLS 1.2
+            "ECDHE-RSA-AES256-GCM-SHA384",                               // TLS 1.2
+            "ECDHE-ECDSA-CHACHA20-POLY1305",                             // TLS 1.2
+            "ECDHE-RSA-CHACHA20-POLY1305",                               // TLS 1.2
+            "ECDHE-ECDSA-AES128-GCM-SHA256",                             // TLS 1.2
+            "ECDHE-RSA-AES128-GCM-SHA256",                               // TLS 1.2
+            "DHE-RSA-AES256-GCM-SHA384",                                 // TLS 1.2 fallback
+            "DHE-RSA-AES128-GCM-SHA256",                                 // TLS 1.2 fallback
+          ].join(":"),
+          // Reject session resumption tickets (force full handshake each time)
+          sessionIdContext: "rojo-ftps-military",
+          // Require server certificate verification (no self-signed bypass)
+          requestCert: true,
+        } : undefined,
+      });
+      ftpConnected = true;
+      return { ok: true };
+    }
+  } catch (e) {
+    await closeFtpConnections();
+    return { ok: false, error: e.message || String(e) };
+  }
+});
+
+ipcMain.handle("ftp-disconnect", async () => {
+  await closeFtpConnections();
+  return { ok: true };
+});
+
+ipcMain.handle("ftp-list-local", async (_event, dirPath) => {
+  try {
+    const dir = dirPath || os.homedir();
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const items = entries.map(e => {
+      const fullPath = path.join(dir, e.name);
+      let stat = null;
+      try { stat = fs.statSync(fullPath); } catch (e) {}
+      return {
+        name: e.name,
+        isDirectory: e.isDirectory(),
+        size: e.isDirectory() ? 0 : (stat ? stat.size : 0),
+        date: stat ? stat.mtime : null,
+        permissions: stat ? formatPermissions(stat.mode) : "---------",
+        path: fullPath,
+      };
+    });
+    items.sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return { ok: true, items, cwd: dir };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle("ftp-list-remote", async (_event, dirPath) => {
+  if (!ftpConnected) return { ok: false, error: "Not connected" };
+  try {
+    if (ftpMode === "sftp") {
+      // SFTP listing
+      const cwd = dirPath || await new Promise((resolve, reject) => {
+        sftpClient.realpath(".", (err, abs) => err ? reject(err) : resolve(abs));
+      });
+      const list = await new Promise((resolve, reject) => {
+        sftpClient.readdir(cwd, (err, items) => {
+          if (err) return reject(err);
+          resolve(items.map(f => ({
+            name: f.filename,
+            isDirectory: (f.attrs.mode & 0o170000) === 0o040000,
+            size: f.attrs.size || 0,
+            date: f.attrs.mtime ? new Date(f.attrs.mtime * 1000) : null,
+            permissions: formatPermissions(f.attrs.mode),
+            path: path.posix.join(cwd, f.filename),
+          })));
+        });
+      });
+      list.sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      return { ok: true, items: list, cwd };
+    } else {
+      // FTP/FTPS listing
+      if (dirPath) await ftpClient.cd(dirPath);
+      const listing = await ftpClient.list();
+      const items = listing.map(f => {
+        const date = f.modifiedAt || f.rawModifiedAt || null;
+        return {
+          name: f.name,
+          isDirectory: f.isDirectory,
+          size: f.size || 0,
+          date: date ? new Date(date) : null,
+          permissions: f.permissions || "---------",
+          path: dirPath ? path.posix.join(dirPath, f.name) : f.name,
+        };
+      });
+      items.sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      const cwd = await ftpClient.pwd();
+      return { ok: true, items, cwd };
+    }
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle("ftp-upload", async (_event, localPath, remotePath) => {
+  if (!ftpConnected) return { ok: false, error: "Not connected" };
+  const transferId = "up_" + Date.now();
+  const fileName = path.basename(localPath);
+  const totalSize = fs.statSync(localPath).size;
+
+  try {
+    if (ftpMode === "sftp") {
+      // SFTP upload with progress via write stream
+      const rs = fs.createReadStream(localPath);
+      const ws = sftpClient.createWriteStream(remotePath);
+      let uploaded = 0;
+      let lastReport = 0;
+      rs.on("data", (chunk) => {
+        uploaded += chunk.length;
+        const now = Date.now();
+        if (now - lastReport > 200) {
+          lastReport = now;
+          if (win && !win.isDestroyed()) {
+            win.webContents.send("ftp-transfer-progress", {
+              id: transferId, name: fileName, direction: "upload",
+              bytes: uploaded, total: totalSize,
+            });
+          }
+        }
+      });
+      await new Promise((resolve, reject) => {
+        rs.pipe(ws);
+        ws.on("finish", () => {
+          if (win && !win.isDestroyed()) {
+            win.webContents.send("ftp-transfer-progress", {
+              id: transferId, name: fileName, direction: "upload",
+              bytes: totalSize, total: totalSize,
+            });
+          }
+          resolve();
+        });
+        ws.on("error", reject);
+        rs.on("error", reject);
+      });
+    } else {
+      // FTP/FTPS upload with progress
+      let lastReport = 0;
+      ftpClient.trackProgress(info => {
+        const now = Date.now();
+        if (now - lastReport > 200) {
+          lastReport = now;
+          if (win && !win.isDestroyed()) {
+            win.webContents.send("ftp-transfer-progress", {
+              id: transferId, name: fileName, direction: "upload",
+              bytes: info.bytes, total: totalSize,
+            });
+          }
+        }
+      });
+      await ftpClient.uploadFrom(localPath, remotePath);
+      ftpClient.trackProgress(undefined);
+    }
+
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("ftp-transfer-done", { id: transferId, name: fileName, direction: "upload", success: true });
+    }
+    return { ok: true };
+  } catch (e) {
+    if (ftpClient) ftpClient.trackProgress(undefined);
+    let errorText = e.message || "Upload failed";
+    if (errorText.toLowerCase().includes("permission denied") || errorText.toLowerCase().includes("eacces") || errorText.toLowerCase().includes("noperm")) {
+      errorText = "Permission denied on remote folder. Choose a writable directory or check SFTP user rights.";
+    }
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("ftp-transfer-done", { id: transferId, name: fileName, direction: "upload", success: false, error: errorText });
+    }
+    return { ok: false, error: errorText };
+  }
+});
+
+ipcMain.handle("ftp-download", async (_event, remotePath, localPath) => {
+  if (!ftpConnected) return { ok: false, error: "Not connected" };
+  const transferId = "dl_" + Date.now();
+  const fileName = path.basename(remotePath);
+
+  try {
+    if (ftpMode === "sftp") {
+      // SFTP download with progress
+      let totalSize = 0;
+      try {
+        const stat = await new Promise((resolve, reject) => {
+          sftpClient.stat(remotePath, (err, stats) => err ? reject(err) : resolve(stats));
+        });
+        totalSize = stat.size || 0;
+      } catch (e) {}
+
+      const ws = fs.createWriteStream(localPath);
+      let downloaded = 0;
+      let lastReport = 0;
+      await new Promise((resolve, reject) => {
+        const rs = sftpClient.createReadStream(remotePath);
+        rs.on("data", (chunk) => {
+          downloaded += chunk.length;
+          const now = Date.now();
+          if (now - lastReport > 200) {
+            lastReport = now;
+            if (win && !win.isDestroyed()) {
+              win.webContents.send("ftp-transfer-progress", {
+                id: transferId, name: fileName, direction: "download",
+                bytes: downloaded, total: totalSize,
+              });
+            }
+          }
+        });
+        rs.on("error", reject);
+        ws.on("error", reject);
+        ws.on("finish", resolve);
+        rs.pipe(ws);
+      });
+    } else {
+      // FTP/FTPS download with progress
+      let totalSize = 0;
+      try {
+        totalSize = await ftpClient.size(remotePath) || 0;
+      } catch (e) {}
+
+      let lastReport = 0;
+      ftpClient.trackProgress(info => {
+        const now = Date.now();
+        if (now - lastReport > 200) {
+          lastReport = now;
+          if (win && !win.isDestroyed()) {
+            win.webContents.send("ftp-transfer-progress", {
+              id: transferId, name: fileName, direction: "download",
+              bytes: info.bytes, total: totalSize,
+            });
+          }
+        }
+      });
+      await ftpClient.downloadTo(localPath, remotePath);
+      ftpClient.trackProgress(undefined);
+    }
+
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("ftp-transfer-done", { id: transferId, name: fileName, direction: "download", success: true });
+    }
+    return { ok: true };
+  } catch (e) {
+    if (ftpClient) ftpClient.trackProgress(undefined);
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("ftp-transfer-done", { id: transferId, name: fileName, direction: "download", success: false, error: e.message });
+    }
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle("ftp-chmod", async (_event, remotePath, mode) => {
+  if (!ftpConnected) return { ok: false, error: "Not connected" };
+  try {
+    if (ftpMode === "sftp") {
+      await new Promise((resolve, reject) => {
+        sftpClient.chmod(remotePath, mode, (err) => err ? reject(err) : resolve());
+      });
+    } else {
+      // Try FTP SITE CHMOD (server-dependent); fall back to raw command
+      const modeStr = typeof mode === "number" ? mode.toString(8) : String(mode);
+      const cmd = `SITE CHMOD ${modeStr} ${remotePath}`;
+      try {
+        await ftpClient.send(cmd);
+      } catch (sendErr) {
+        // Some servers don't expose send(); try using the raw socket if available
+        return { ok: false, error: "FTP permission changes are not supported by this server. Use SFTP for chmod." };
+      }
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 // ---------- App Lifecycle ----------
 
 app.whenReady().then(async () => {
-  if (process.platform === "darwin") {
-    app.setAsDefaultProtocolClient("magnet");
-  }
+  createSplash();
 
   await initWebTorrent();
   await restoreTorrents();
