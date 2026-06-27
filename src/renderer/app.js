@@ -533,6 +533,78 @@ async function pauseTorrent(infoHash) {
   }
 }
 
+function openTorrentSearchModal() {
+  $("torrentSearchModal").style.display = "flex";
+  $("torrentSearchInput").focus();
+}
+
+function closeTorrentSearchModal() {
+  $("torrentSearchModal").style.display = "none";
+  $("torrentSearchResults").innerHTML = "";
+  $("torrentSearchInput").value = "";
+}
+
+async function runTorrentSearch() {
+  const query = $("torrentSearchInput").value.trim();
+  if (!query) return;
+  const container = $("torrentSearchResults");
+  container.innerHTML = '<div class="torrent-search-loading">Searching...</div>';
+  try {
+    const provider = $("torrentSearchProvider").value;
+    const res = await rojoAPI.searchTorrents(query, provider);
+    if (res.ok) {
+      renderTorrentSearchResults(res.results || []);
+    } else {
+      container.innerHTML = `<div class="torrent-search-empty">Error: ${escapeHtml(res.error || "Search failed")}</div>`;
+    }
+  } catch (e) {
+    container.innerHTML = `<div class="torrent-search-empty">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderTorrentSearchResults(results) {
+  const container = $("torrentSearchResults");
+  container.innerHTML = "";
+  if (results.length === 0) {
+    container.innerHTML = '<div class="torrent-search-empty">No results found</div>';
+    return;
+  }
+  for (const r of results) {
+    const el = document.createElement("div");
+    el.className = "torrent-search-result";
+    el.innerHTML = `
+      <div class="torrent-search-info">
+        <div class="torrent-search-title">${escapeHtml(r.title)}</div>
+        <div class="torrent-search-meta">${escapeHtml(r.detail || "")} • ${escapeHtml(r.size || "Unknown size")} • ${r.seeds} seeds / ${r.peers} peers</div>
+      </div>
+      <button class="btn btn-small btn-primary btn-download-search" data-magnet="${escapeHtml(r.magnet)}">Download</button>
+    `;
+    el.querySelector(".btn-download-search").addEventListener("click", () => {
+      downloadSearchResult(r.magnet, r.title);
+    });
+    container.appendChild(el);
+  }
+}
+
+async function downloadSearchResult(magnet, title) {
+  try {
+    const res = await rojoAPI.addMagnet(magnet);
+    if (res.ok) {
+      showToast(`Added: ${res.name || title}`);
+    } else if (res.duplicate) {
+      if (confirm(`"${res.name || title}" is already in your download list.\n\nDo you want to remove the old one and add it again?`)) {
+        await rojoAPI.removeTorrent(res.infoHash, true);
+        const retry = await rojoAPI.addMagnet(magnet);
+        if (retry.ok) showToast(`Replaced: ${retry.name || title}`);
+      }
+    } else {
+      showToast(res.error || "Failed to add torrent", "error");
+    }
+  } catch (e) {
+    showToast(e.message, "error");
+  }
+}
+
 async function resumeTorrent(infoHash) {
   try {
     const res = await rojoAPI.resumeTorrent(infoHash);
@@ -784,16 +856,30 @@ async function renderHistoryList() {
       const dateStr = dateObj ? dateObj.toLocaleDateString() : "Unknown";
       const timeStr = dateObj ? dateObj.toLocaleTimeString() : "";
       const name = escapeHtml(item.name || "Unknown");
+      const itemPath = escapeHtml(item.path || "");
       row.innerHTML = `
         <div class="history-info">
           <div class="history-name" title="${name}">${name}</div>
           <div class="history-date">${dateStr} &nbsp;${timeStr}</div>
+          ${itemPath ? `<div class="history-path" title="${itemPath}">${itemPath}</div>` : ""}
         </div>
         <div class="history-actions" style="display:flex;gap:6px;">
+          <button class="btn-small btn-open-folder btn-open-history" data-path="${itemPath}" ${itemPath ? "" : "disabled"}>Folder</button>
           <button class="btn-small btn-primary btn-add-history" data-magnet="${escapeHtml(item.magnetUri || "")}">Add</button>
           <button class="btn-small btn-remove btn-del-history" data-index="${index}">Delete</button>
         </div>
       `;
+      const openBtn = row.querySelector(".btn-open-history");
+      openBtn.addEventListener("click", async () => {
+        const p = openBtn.dataset.path;
+        if (!p) return;
+        try {
+          const res = await rojoAPI.openTorrentFolder(p);
+          if (!res.ok) showToast(res.error || "Failed to open folder", "error");
+        } catch (e) {
+          showToast("Failed to open folder", "error");
+        }
+      });
       const addBtn = row.querySelector(".btn-add-history");
       addBtn.addEventListener("click", () => {
         const magnet = addBtn.dataset.magnet;
@@ -936,6 +1022,15 @@ $("btnCancelMagnet").addEventListener("click", closeModal);
 $("magnetInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") addMagnet();
 });
+$("btnSearchTorrents").addEventListener("click", openTorrentSearchModal);
+$("btnTorrentSearchRun").addEventListener("click", runTorrentSearch);
+$("btnTorrentSearchClose").addEventListener("click", closeTorrentSearchModal);
+$("btnTorrentSearchCancel").addEventListener("click", closeTorrentSearchModal);
+$("torrentSearchModal").querySelector(".modal-backdrop").addEventListener("click", closeTorrentSearchModal);
+$("torrentSearchInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runTorrentSearch();
+  if (e.key === "Escape") closeTorrentSearchModal();
+});
 $("btnSpeedTest").addEventListener("click", async () => {
   const btn = $("btnSpeedTest");
   const originalText = btn.querySelector("span").textContent;
@@ -1029,18 +1124,38 @@ function showFilePickerModal(data) {
   // Show malware scan warning banner
   const warningEl = $("filePickerScanWarning");
   const warningListEl = $("filePickerScanList");
+  warningListEl.innerHTML = "";
+  let hasWarnings = false;
+
   if (data.scanResults && !data.scanResults.safe && data.scanResults.warnings.length > 0) {
-    warningListEl.innerHTML = "";
     data.scanResults.warnings.forEach((w) => {
       const li = document.createElement("li");
       li.textContent = w;
       warningListEl.appendChild(li);
     });
-    warningEl.style.display = "block";
-  } else {
-    warningEl.style.display = "none";
-    warningListEl.innerHTML = "";
+    hasWarnings = true;
   }
+
+  if (data.vtResults) {
+    const li = document.createElement("li");
+    li.textContent = data.vtResults.message;
+    if (data.vtResults.flagged) {
+      li.className = "scan-warning-vt-flagged";
+      li.style.fontWeight = "bold";
+    }
+    if (data.vtResults.url) {
+      const link = document.createElement("a");
+      link.href = data.vtResults.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = " View report";
+      li.appendChild(link);
+    }
+    warningListEl.appendChild(li);
+    hasWarnings = true;
+  }
+
+  warningEl.style.display = hasWarnings ? "block" : "none";
 
   $("filePickerModal").classList.add("show");
 }

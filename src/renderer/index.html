@@ -36,6 +36,10 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
           <span>Add Magnet</span>
         </button>
+        <button class="btn btn-secondary" id="btnSearchTorrents" title="Search torrent sites">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          <span>Search</span>
+        </button>
         <button class="btn btn-secondary" id="btnAddUrl" title="Add torrent from URL (⌘+U)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
           <span>Add URL</span>
@@ -373,6 +377,34 @@
       <div class="modal-actions">
         <button class="btn btn-secondary" id="btnCancelChmod">Cancel</button>
         <button class="btn btn-primary" id="btnConfirmChmod">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Search Torrents Modal -->
+  <div id="torrentSearchModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-content--wide">
+      <div class="modal-header">
+        <h3>Search Torrents</h3>
+        <button class="modal-close" id="btnTorrentSearchClose">&times;</button>
+      </div>
+      <div class="torrent-search-bar">
+        <input type="text" id="torrentSearchInput" placeholder="Search movies, software, books..." autofocus />
+        <select id="torrentSearchProvider" class="torrent-search-provider">
+          <option value="yts">YTS (movies)</option>
+          <option value="piratebay">The Pirate Bay</option>
+          <option value="rarbg">RARBG</option>
+          <option value="nyaa">Nyaa</option>
+          <option value="uindex">UIndex</option>
+          <option value="limetorrents">LimeTorrents</option>
+        </select>
+        <button class="btn btn-primary" id="btnTorrentSearchRun">Search</button>
+      </div>
+      <div class="torrent-search-hint">Searches public torrent indexers. Only download content you have the right to access.</div>
+      <div id="torrentSearchResults" class="torrent-search-results"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btnTorrentSearchCancel">Close</button>
       </div>
     </div>
   </div>

@@ -1612,6 +1612,15 @@ html, body {
   font-size: 0.7rem;
 }
 
+.history-path {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
 .history-actions {
   flex-shrink: 0;
 }
@@ -1895,6 +1904,88 @@ html, body {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-weight: 600;
   color: var(--text);
+}
+
+.torrent-search-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.torrent-search-bar input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.torrent-search-provider {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  background: var(--bg);
+  color: var(--text);
+  min-width: 130px;
+}
+
+.torrent-search-hint {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.torrent-search-results {
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--bg);
+}
+
+.torrent-search-result {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.torrent-search-result:last-child {
+  border-bottom: none;
+}
+
+.torrent-search-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.torrent-search-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.torrent-search-meta {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.torrent-search-loading,
+.torrent-search-empty {
+  padding: 20px;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-muted);
 }
 
 .ftp-transfer-bar {

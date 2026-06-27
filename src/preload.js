@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("rojoAPI", {
 
   // Torrent actions
   addMagnet: (magnet) => ipcRenderer.invoke("add-magnet", magnet),
+  searchTorrents: (query, provider) => ipcRenderer.invoke("search-torrents", query, provider),
   addFile: (arrayBuffer) => ipcRenderer.invoke("add-file", arrayBuffer),
   removeTorrent: (infoHash, deleteFiles) => ipcRenderer.invoke("remove-torrent", infoHash, deleteFiles),
   secureDeleteTorrent: (infoHash) => ipcRenderer.invoke("secure-delete-torrent", infoHash),

@@ -3,8 +3,32 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const https = require("https");
+const cheerio = require("cheerio");
 const { spawn } = require("child_process");
 const crypto = require("crypto");
+
+// Load .env from project root or packaged app location
+(function loadEnv() {
+  try {
+    const dotenv = require("dotenv");
+    const candidates = [
+      path.join(__dirname, "..", ".env"),
+      path.join(__dirname, "..", "..", ".env"),
+      path.join(process.cwd(), ".env"),
+    ];
+    for (const p of candidates) {
+      try {
+        if (fs.existsSync(p)) {
+          dotenv.config({ path: p });
+          console.log("[RO^JO] Loaded .env from", p);
+          return;
+        }
+      } catch {}
+    }
+  } catch {
+    /* dotenv is optional */
+  }
+})();
 
 // Prevent WebRTC/RTCDataChannel crashes from killing the app
 process.on("uncaughtException", (err) => {
@@ -110,20 +134,34 @@ function buildFileList(t, displayName) {
 }
 
 // ---------- Malware Scanner (pre-download heuristics + post-download ClamAV) ----------
-const SUSPICIOUS_EXTS = [".exe", ".msi", ".bat", ".cmd", ".vbs", ".js", ".scr", ".pif", ".com", ".jar", ".ps1", ".reg", ".docm", ".xlsm", ".pptm", ".dll", ".sys", ".inf"];
-const DOUBLE_EXT_RE = /\.[a-z0-9]{2,6}\.(exe|msi|bat|cmd|vbs|js|scr|pif|com|jar|ps1|reg|docm|xlsm|pptm)$/i;
-const SUSPICIOUS_NAME_RE = /\b(crack|keygen|patch|serial|activator|hack|cheat|trojan|virus|malware|backdoor|rootkit|worm|spyware)\b/i;
+const SUSPICIOUS_EXTS = [
+  ".exe", ".msi", ".bat", ".cmd", ".vbs", ".js", ".jse", ".wsf", ".wsh", ".scr", ".pif", ".com", ".jar",
+  ".ps1", ".psm1", ".psd1", ".reg", ".docm", ".xlsm", ".pptm", ".dotm", ".xlam", ".dll", ".sys", ".inf",
+  ".drv", ".cpl", ".hta", ".chm", ".vb", ".vbe", ".cmd", ".shs", ".lnk", ".iso", ".img", ".dmg", ".pkg",
+];
+const DOUBLE_EXT_RE = /\.[a-z0-9]{2,6}\.(exe|msi|bat|cmd|vbs|js|jse|wsf|wsh|scr|pif|com|jar|ps1|psm1|reg|docm|xlsm|pptm|dotm|xlam|hta|chm|vb|vbe|shs|lnk)$/i;
+const SUSPICIOUS_NAME_RE = /\b(crack|keygen|patch|serial|activator|hack|cheat|trojan|virus|malware|backdoor|rootkit|worm|spyware|ransomware|keylogger|stealer|cryptor|miner|botnet|payload|exploit|loader)\b/i;
+const RANDOM_NAME_RE = /^[a-zA-Z0-9]{16,}\.(exe|msi|bat|cmd|vbs|js|scr|jar|ps1|reg|docm|xlsm|pptm|dll|sys)$/i;
+const OBFUSCATED_RE = /([a-zA-Z0-9])\1{5,}|_{5,}|\.{5,}|\b[a-zA-Z0-9]{30,}\b/;
+const MACRO_EXTS = [".docm", ".xlsm", ".pptm", ".dotm", ".xlam"];
 
 function scanFileListForMalware(fileList, torrentName) {
   const warnings = [];
   const riskyFiles = [];
   let hasExe = false;
   let mediaCount = 0;
+  let archiveCount = 0;
+  const seenNames = new Set();
+
+  const lowerTorrentName = (torrentName || "").toLowerCase();
 
   for (const f of fileList) {
     const lowerName = f.name.toLowerCase();
     const ext = path.extname(lowerName);
     const base = path.basename(lowerName, ext);
+
+    if (seenNames.has(lowerName)) continue;
+    seenNames.add(lowerName);
 
     // Double extension trick (e.g. movie.mp4.exe)
     if (DOUBLE_EXT_RE.test(lowerName)) {
@@ -134,9 +172,21 @@ function scanFileListForMalware(fileList, torrentName) {
 
     // Suspicious extensions
     if (SUSPICIOUS_EXTS.includes(ext)) {
-      warnings.push(`"${f.name}" is an executable/script file (${ext})`);
+      if (MACRO_EXTS.includes(ext)) {
+        warnings.push(`"${f.name}" is an Office macro document — may contain malicious macros`);
+      } else if (ext === ".iso" || ext === ".img") {
+        warnings.push(`"${f.name}" is a disk image — often used to bypass malware scanners`);
+      } else if (ext === ".hta") {
+        warnings.push(`"${f.name}" is an HTML Application script — can execute code`);
+      } else if (ext === ".chm") {
+        warnings.push(`"${f.name}" is a compiled HTML help file — may run malicious scripts`);
+      } else if (ext === ".lnk") {
+        warnings.push(`"${f.name}" is a Windows shortcut — may point to malware`);
+      } else {
+        warnings.push(`"${f.name}" is an executable/script file (${ext})`);
+      }
       riskyFiles.push(f.name);
-      if ([".exe", ".msi", ".dmg", ".pkg", ".app"].includes(ext)) hasExe = true;
+      if ([".exe", ".msi", ".dmg", ".pkg", ".app", ".iso", ".img"].includes(ext)) hasExe = true;
       continue;
     }
 
@@ -147,15 +197,43 @@ function scanFileListForMalware(fileList, torrentName) {
       continue;
     }
 
+    // Random-looking executable name
+    if (RANDOM_NAME_RE.test(lowerName)) {
+      warnings.push(`"${f.name}" has a random-looking executable name — common for malware`);
+      riskyFiles.push(f.name);
+      hasExe = true;
+      continue;
+    }
+
+    // Obfuscated name
+    if (OBFUSCATED_RE.test(lowerName)) {
+      warnings.push(`"${f.name}" has a heavily obfuscated name — suspicious`);
+      riskyFiles.push(f.name);
+      continue;
+    }
+
     // Count media files to flag executables inside media torrents
-    if ([".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg", ".epub", ".pdf", ".zip", ".rar", ".7z"].includes(ext)) {
+    if ([".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg"].includes(ext)) {
       mediaCount++;
+    }
+    if ([".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"].includes(ext)) {
+      archiveCount++;
     }
   }
 
   // If torrent looks like media but contains executables
   if (hasExe && mediaCount > 0) {
     warnings.unshift("This torrent contains executables alongside media files — strongly suspicious");
+  }
+
+  // If torrent name contains suspicious keywords but no risky files flagged yet
+  if (SUSPICIOUS_NAME_RE.test(lowerTorrentName) && riskyFiles.length === 0) {
+    warnings.push(`Torrent name "${torrentName}" contains suspicious keywords`);
+  }
+
+  // Archives without clear media/software can be risky
+  if (archiveCount > 0 && mediaCount === 0 && !hasExe) {
+    warnings.push("This torrent contains only archives — verify contents before extracting");
   }
 
   return {
@@ -165,8 +243,71 @@ function scanFileListForMalware(fileList, torrentName) {
   };
 }
 
-function doShowFilePicker(t, fileList, displayName, downloadPath, magnetUri, torrentFilePath = null) {
+async function checkVirusTotal(infoHash) {
+  const apiKey = String(process.env.VIRUSTOTAL_API_KEY || "").trim();
+  if (!apiKey) return null;
+  if (!infoHash || infoHash.length !== 40) return null;
+
+  const url = `https://www.virustotal.com/api/v3/files/${infoHash.toLowerCase()}`;
+  return new Promise((resolve) => {
+    const req = https.get(url, {
+      headers: {
+        "x-apikey": apiKey,
+        "Accept": "application/json",
+        "User-Agent": "Rojo-Torrent-Scanner/1.0",
+      },
+      timeout: 10000,
+    }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => data += chunk);
+      res.on("end", () => {
+        if (res.statusCode === 404) {
+          resolve({ known: false, message: "Not in VirusTotal database" });
+          return;
+        }
+        if (res.statusCode !== 200) {
+          console.warn("[RO^JO] VirusTotal lookup failed:", res.statusCode, data.slice(0, 200));
+          resolve({ error: true, message: `VirusTotal API error ${res.statusCode}` });
+          return;
+        }
+        try {
+          const json = JSON.parse(data);
+          const stats = json?.data?.attributes?.last_analysis_stats || {};
+          const malicious = stats.malicious || 0;
+          const suspicious = stats.suspicious || 0;
+          const harmless = stats.harmless || 0;
+          const undetected = stats.undetected || 0;
+          const total = malicious + suspicious + harmless + undetected;
+          resolve({
+            known: true,
+            malicious,
+            suspicious,
+            harmless,
+            undetected,
+            total,
+            message: total > 0
+              ? `VirusTotal: ${malicious} malicious, ${suspicious} suspicious out of ${total} engines`
+              : "VirusTotal: no analysis data",
+            flagged: malicious > 0 || suspicious > 0,
+            url: `https://www.virustotal.com/gui/file/${infoHash.toLowerCase()}`,
+          });
+        } catch (e) {
+          resolve({ error: true, message: "Invalid VirusTotal response" });
+        }
+      });
+    }).on("error", (err) => {
+      console.warn("[RO^JO] VirusTotal request error:", err.message);
+      resolve({ error: true, message: `VirusTotal request failed: ${err.message}` });
+    }).on("timeout", () => {
+      req.destroy();
+      resolve({ error: true, message: "VirusTotal request timed out" });
+    });
+  });
+}
+
+async function doShowFilePicker(t, fileList, displayName, downloadPath, magnetUri, torrentFilePath = null) {
   const scanResults = scanFileListForMalware(fileList, displayName || t.name);
+  const vtResults = await checkVirusTotal(t.infoHash);
   pendingFileSelection.set(t.infoHash, {
     torrent: t,
     displayName: displayName || t.name,
@@ -175,6 +316,7 @@ function doShowFilePicker(t, fileList, displayName, downloadPath, magnetUri, tor
     torrentFilePath,
     fileList,
     scanResults,
+    vtResults,
   });
   console.log(`[RO^JO] Broadcasting file picker for ${displayName || t.name} with ${fileList.length} files`);
   broadcast("show-file-picker", {
@@ -182,6 +324,7 @@ function doShowFilePicker(t, fileList, displayName, downloadPath, magnetUri, tor
     name: displayName || t.name,
     fileList,
     scanResults,
+    vtResults,
   });
 }
 
@@ -810,6 +953,64 @@ function loadPortConfig() {
 }
 loadPortConfig();
 
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${units[i]}`;
+}
+
+function httpRequest(url, timeoutMs = 15000, redirectCount = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirectCount > 5) return reject(new Error("Too many redirects"));
+    const client = url.startsWith("http:") ? require("http") : https;
+    const options = {
+      timeout: timeoutMs,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/html, application/xhtml+xml, application/xml;q=0.9, */*;q=0.8",
+      },
+    };
+    client.get(url, options, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        const next = new URL(res.headers.location, url).toString();
+        return httpRequest(next, timeoutMs, redirectCount + 1).then(resolve).catch(reject);
+      }
+      let data = "";
+      res.on("data", (chunk) => data += chunk);
+      res.on("end", () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) resolve(data);
+        else reject(new Error(`HTTP ${res.statusCode}`));
+      });
+    }).on("error", reject).on("timeout", () => reject(new Error("Request timed out")));
+  });
+}
+
+function httpGetJson(url) {
+  return httpRequest(url, 15000).then((data) => {
+    try {
+      return JSON.parse(data);
+    } catch (e) {
+      throw new Error("Invalid JSON response");
+    }
+  });
+}
+
+function httpGetText(url, timeoutMs = 20000) {
+  return httpRequest(url, timeoutMs);
+}
+
+function buildMagnetLink(infoHash, name, trackers) {
+  const parts = [
+    `xt=urn:btih:${infoHash}`,
+    `dn=${encodeURIComponent(name || "")}`,
+  ];
+  for (const tr of trackers) {
+    parts.push(`tr=${encodeURIComponent(tr)}`);
+  }
+  return `magnet:?${parts.join("&")}`;
+}
+
 function savePortConfig(port) {
   try {
     fs.writeFileSync(PORT_CONFIG_PATH, JSON.stringify({ port }, null, 2), "utf-8");
@@ -912,6 +1113,7 @@ function addTorrentToHistory(entry) {
     name: entry.name || "Unknown",
     magnetUri: entry.magnetUri,
     infoHash: entry.infoHash || "",
+    path: entry.path || "",
     addedAt: entry.addedAt || Date.now(),
   });
   // Trim to max
@@ -1149,6 +1351,7 @@ async function createWindow() {
         { role: "paste" },
         { role: "pasteAndMatchStyle" },
         { role: "delete" },
+        { type: "separator" },
         { role: "selectAll" },
       ],
     },
@@ -1179,6 +1382,24 @@ async function createWindow() {
     },
   ]);
   Menu.setApplicationMenu(appMenu);
+
+  // Right-click context menu for copy / paste / cut / select-all
+  win.webContents.on("context-menu", (event, params) => {
+    const { Menu } = require("electron");
+    const template = [
+      { role: "undo", enabled: params.editFlags.canUndo },
+      { role: "redo", enabled: params.editFlags.canRedo },
+      { type: "separator" },
+      { role: "cut", enabled: params.editFlags.canCut },
+      { role: "copy", enabled: params.editFlags.canCopy },
+      { role: "paste", enabled: params.editFlags.canPaste },
+      { role: "pasteAndMatchStyle", enabled: params.editFlags.canPaste },
+      { role: "delete", enabled: params.editFlags.canDelete },
+      { type: "separator" },
+      { role: "selectAll", enabled: params.editFlags.canSelectAll },
+    ];
+    Menu.buildFromTemplate(template).popup({ window: win });
+  });
 
   win.once("ready-to-show", () => {
     win.show();
@@ -1555,6 +1776,7 @@ async function handleAddMagnet(magnetUri) {
           name: displayName || existingTorrent.name,
           magnetUri: magnetUri,
           infoHash: existingTorrent.infoHash,
+          path: actualPath,
           addedAt: Date.now(),
         });
         return { ok: true, infoHash: existingTorrent.infoHash, name: displayName || existingTorrent.name };
@@ -1583,7 +1805,7 @@ async function handleAddMagnet(magnetUri) {
         torrent = client.add(magnetUri, {
           path: addPath,
           announce: ROJO_CONFIG.announce,
-        }, (t) => {
+        }, async (t) => {
           // debug: metadata received
           // Deselect all files initially, then show file picker
           t.files.forEach(f => f.deselect());
@@ -1649,6 +1871,7 @@ async function handleAddMagnet(magnetUri) {
                 name: displayName || realName,
                 magnetUri: magnetUri,
                 infoHash: realInfoHash,
+                path: actualPath,
                 addedAt: Date.now(),
               });
               if (isExternalDrive(downloadPath)) {
@@ -1677,7 +1900,7 @@ async function handleAddMagnet(magnetUri) {
           });
           let fileList = buildFileList(t, displayName);
           if (!fileList) {
-            setTimeout(() => {
+            setTimeout(async () => {
               if (responded) return;
               fileList = buildFileList(t, displayName);
               if (!fileList) {
@@ -1687,14 +1910,14 @@ async function handleAddMagnet(magnetUri) {
                 if (!responded) { responded = true; resolve({ ok: false, error: "Failed to read torrent file list" }); }
                 return;
               }
-              doShowFilePicker(t, fileList, displayName, downloadPath, magnetUri);
+              await doShowFilePicker(t, fileList, displayName, downloadPath, magnetUri);
               if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: displayName || t.name, filePicker: true }); }
             }, 100);
             return;
           }
-          doShowFilePicker(t, fileList, displayName, downloadPath, magnetUri);
+          await doShowFilePicker(t, fileList, displayName, downloadPath, magnetUri);
           if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: displayName || t.name, filePicker: true }); }
-        });
+        })
         // debug: waiting for metadata
       } catch (err) {
         console.error(`[RO^JO] Error adding torrent to client:`, err.message);
@@ -1727,6 +1950,7 @@ async function handleAddMagnet(magnetUri) {
       torrent.on("done", () => {
         const entry = activeTorrents.get(torrent.infoHash);
         if (entry) entry.status = "completed";
+        autoConfirmPendingOnComplete(torrent);
         broadcast("torrent-completed", { infoHash: torrent.infoHash, name: entry ? entry.name : torrent.name });
       });
 
@@ -1797,7 +2021,7 @@ async function handleAddTorrentFile(buffer, downloadPath) {
         torrent = client.add(buffer, {
           path: TEMP_PENDING_DIR2,
           announce: ROJO_CONFIG.announce,
-        }, (t) => {
+        }, async (t) => {
           // debug: torrent ready
           // Deselect all files initially
           t.files.forEach(f => f.deselect());
@@ -1865,6 +2089,7 @@ async function handleAddTorrentFile(buffer, downloadPath) {
                 name: realName,
                 magnetUri: `magnet:?xt=urn:btih:${realInfoHash}`,
                 infoHash: realInfoHash,
+                path: actualPath,
                 addedAt: Date.now(),
               });
               if (isExternalDrive(downloadPath)) {
@@ -1894,7 +2119,7 @@ async function handleAddTorrentFile(buffer, downloadPath) {
           });
           let fileList = buildFileList(t, t.name);
           if (!fileList) {
-            setTimeout(() => {
+            setTimeout(async () => {
               if (responded) return;
               fileList = buildFileList(t, t.name);
               if (!fileList) {
@@ -1904,16 +2129,16 @@ async function handleAddTorrentFile(buffer, downloadPath) {
                 if (!responded) { responded = true; resolve({ ok: false, error: "Failed to read torrent file list" }); }
                 return;
               }
-              doShowFilePicker(t, fileList, t.name, downloadPath, null, torrentFilePath);
+              await doShowFilePicker(t, fileList, t.name, downloadPath, null, torrentFilePath);
               clearTimeout(timeout);
               if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: t.name, filePicker: true }); }
             }, 100);
             return;
           }
-          doShowFilePicker(t, fileList, t.name, downloadPath, null, torrentFilePath);
+          await doShowFilePicker(t, fileList, t.name, downloadPath, null, torrentFilePath);
           clearTimeout(timeout);
           if (!responded) { responded = true; resolve({ ok: true, infoHash: t.infoHash, name: t.name, filePicker: true }); }
-        });
+        })
       } catch (err) {
         clearTimeout(timeout);
         if (!responded) { responded = true; resolve({ ok: false, error: err.message }); }
@@ -1945,6 +2170,7 @@ async function handleAddTorrentFile(buffer, downloadPath) {
       torrent.on("done", () => {
         const entry = activeTorrents.get(torrent.infoHash);
         if (entry) entry.status = "completed";
+        autoConfirmPendingOnComplete(torrent);
         broadcast("torrent-completed", { infoHash: torrent.infoHash, name: entry ? entry.name : torrent.name });
       });
 
@@ -2195,6 +2421,309 @@ ipcMain.handle("get-asset-path", (_event, name) => {
 
 ipcMain.handle("add-magnet", async (_event, magnet) => {
   return handleAddMagnet(magnet);
+});
+
+ipcMain.handle("search-torrents", async (_event, query, provider) => {
+  if (!query || !query.trim()) return { ok: false, error: "Enter a search term" };
+  try {
+    const trackers = ROJO_CONFIG.announce || [];
+    const results = [];
+    const cleanQuery = query.trim();
+    const encoded = encodeURIComponent(cleanQuery);
+
+    if (provider === "yts" || !provider) {
+      const ytsMirrors = [
+        "https://yts.mx",
+        "https://yts.lt",
+        "https://yts.am",
+        "https://yts.ag",
+        "https://yts.ae",
+        "https://yts.autos",
+        "https://yts.rs",
+      ];
+      let ytsData = null;
+      let lastError = null;
+      for (const mirror of ytsMirrors) {
+        try {
+          const url = `${mirror}/api/v2/list_movies.json?query_term=${encoded}&limit=20&sort_by=peers&order_by=desc`;
+          ytsData = await httpGetJson(url);
+          if (ytsData?.status === "ok") break;
+        } catch (e) {
+          lastError = e;
+          continue;
+        }
+      }
+      if (!ytsData && lastError) throw lastError;
+      const movies = ytsData?.data?.movies || [];
+      for (const movie of movies) {
+        for (const t of movie.torrents || []) {
+          results.push({
+            title: `${movie.title} (${movie.year})`,
+            detail: t.quality + (t.type ? ` • ${t.type}` : ""),
+            size: t.size,
+            seeds: t.seeds || 0,
+            peers: t.peers || 0,
+            magnet: buildMagnetLink(t.hash, movie.title, trackers),
+            infoHash: t.hash,
+          });
+        }
+      }
+    }
+
+    if (provider === "piratebay") {
+      const tpbMirrors = [
+        "https://apibay.org",
+        "https://apibay.com",
+        "https://apibay.net",
+        "https://apibay.info",
+        "https://apibay.xyz",
+      ];
+      let tpbData = null;
+      let tpbError = null;
+      for (let attempt = 0; attempt < tpbMirrors.length; attempt++) {
+        const mirror = tpbMirrors[attempt % tpbMirrors.length];
+        try {
+          if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 1500));
+          const url = `${mirror}/q.php?q=${encoded}&cat=0`;
+          tpbData = await httpGetJson(url);
+          if (Array.isArray(tpbData) && tpbData.length > 0) break;
+        } catch (e) {
+          tpbError = e;
+          const isRateLimit = e.message && e.message.includes("429");
+          if (!isRateLimit && attempt < tpbMirrors.length - 1) continue;
+        }
+      }
+      if (!tpbData && tpbError) throw tpbError;
+      const items = Array.isArray(tpbData) ? tpbData : [];
+      for (const item of items) {
+        if (!item.info_hash || item.info_hash === "0000000000000000000000000000000000000000") continue;
+        const sizeBytes = parseInt(item.size, 10);
+        const sizeText = sizeBytes ? formatBytes(sizeBytes) : item.size;
+        results.push({
+          title: item.name,
+          detail: `TPB • ${item.status || "unknown"}`,
+          size: sizeText,
+          seeds: parseInt(item.seeders, 10) || 0,
+          peers: parseInt(item.leechers, 10) || 0,
+          magnet: buildMagnetLink(item.info_hash, item.name, trackers),
+          infoHash: item.info_hash,
+        });
+      }
+    }
+
+    if (provider === "uindex") {
+      const safeQuery = cleanQuery.replace(/[^a-zA-Z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+      const q = encodeURIComponent(safeQuery);
+      const url = `https://uindex.org/search.php?search=${q}&c=0`;
+      let html = "";
+      let uindexError = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          html = await httpGetText(url, 60000);
+          uindexError = null;
+          break;
+        } catch (e) {
+          uindexError = e;
+          if (attempt === 0) continue;
+        }
+      }
+      if (uindexError) throw uindexError;
+      const $ = cheerio.load(html);
+      $("table tbody tr, table tr").each((_, row) => {
+        const cells = $(row).find("td");
+        if (cells.length < 5) return;
+        const nameCell = $(cells[0]);
+        const magnetLink = nameCell.find('a[href^="magnet:"]').attr("href") || $(row).find('a[href^="magnet:"]').attr("href");
+        if (!magnetLink) return;
+        const infoHashMatch = magnetLink.match(/urn:btih:([a-fA-F0-9]{40})/i);
+        if (!infoHashMatch) return;
+        const title = nameCell.text().trim() || $(cells[1]).text().trim() || "Unknown";
+        const sizeText = $(cells[2]).text().trim() || "Unknown";
+        const seedsText = $(cells[3]).text().trim() || "0";
+        const peersText = $(cells[4]).text().trim() || "0";
+        results.push({
+          title,
+          detail: "UIndex",
+          size: sizeText,
+          seeds: parseInt(seedsText, 10) || 0,
+          peers: parseInt(peersText, 10) || 0,
+          magnet: magnetLink,
+          infoHash: infoHashMatch[1].toUpperCase(),
+        });
+      });
+    }
+
+    if (provider === "rarbg") {
+      const rarbgQuery = cleanQuery.replace(/[^a-zA-Z0-9\s]/g, " ").replace(/\s+/g, "+").trim();
+      const q = encodeURIComponent(rarbgQuery);
+      const url = `https://rargb.to/search/?search=${q}`;
+      const html = await httpGetText(url, 15000);
+      const $ = cheerio.load(html);
+      const detailLinks = [];
+      $("table tr.lista2").each((_, row) => {
+        const cells = $(row).find("td");
+        if (cells.length < 7) return;
+        const linkEl = $(cells[1]).find("a[href^='/torrent/']");
+        const href = linkEl.attr("href");
+        if (!href) return;
+        const title = linkEl.attr("title") || linkEl.text().trim() || "Unknown";
+        const sizeText = $(cells[4]).text().trim();
+        const seedsText = $(cells[5]).text().trim();
+        const peersText = $(cells[6]).text().trim();
+        detailLinks.push({
+          title,
+          size: sizeText,
+          seeds: parseInt(seedsText, 10) || 0,
+          peers: parseInt(peersText, 10) || 0,
+          detailUrl: new URL(href, "https://rargb.to").toString(),
+        });
+      });
+      // Limit to top 5 to avoid too many detail-page requests
+      for (let i = 0; i < Math.min(detailLinks.length, 5); i++) {
+        const item = detailLinks[i];
+        try {
+          const detailHtml = await httpGetText(item.detailUrl, 15000);
+          const magnetMatch = detailHtml.match(/magnet:\?[^"'<>\s]+/);
+          if (!magnetMatch) continue;
+          const infoHashMatch = magnetMatch[0].match(/urn:btih:([a-fA-F0-9]{40})/i);
+          if (!infoHashMatch) continue;
+          results.push({
+            title: item.title,
+            detail: "RARBG",
+            size: item.size,
+            seeds: item.seeds,
+            peers: item.peers,
+            magnet: magnetMatch[0],
+            infoHash: infoHashMatch[1].toUpperCase(),
+          });
+        } catch (e) {
+          // Skip detail pages that fail to load
+          continue;
+        }
+      }
+    }
+
+    if (provider === "nyaa") {
+      const q = encodeURIComponent(cleanQuery);
+      const url = `https://nyaa.si/?f=0&c=0_0&q=${q}&s=seeders&o=desc`;
+      const html = await httpGetText(url, 15000);
+      const $ = cheerio.load(html);
+      $("table.torrent-list tbody tr").each((_, row) => {
+        const cells = $(row).find("td");
+        if (cells.length < 6) return;
+        const linkEl = $(cells[1]).find("a").not(".comments").last();
+        const title = linkEl.attr("title") || linkEl.text().trim() || "Unknown";
+        const magnetLink = $(cells[2]).find('a[href^="magnet:"]').attr("href");
+        if (!magnetLink) return;
+        const infoHashMatch = magnetLink.match(/urn:btih:([a-fA-F0-9]{40})/i);
+        if (!infoHashMatch) return;
+        const sizeText = $(cells[3]).text().trim();
+        const seedsText = $(cells[5]).text().trim();
+        const peersText = $(cells[6]).text().trim();
+        results.push({
+          title,
+          detail: "Nyaa",
+          size: sizeText,
+          seeds: parseInt(seedsText, 10) || 0,
+          peers: parseInt(peersText, 10) || 0,
+          magnet: magnetLink,
+          infoHash: infoHashMatch[1].toUpperCase(),
+        });
+      });
+    }
+
+    if (provider === "limetorrents") {
+      const limeQuery = cleanQuery.replace(/\s+/g, "-");
+      const q = encodeURIComponent(limeQuery);
+      const limeMirrors = [
+        "https://www.limetorrents.fun",
+        "https://www.limetorrents.lol",
+        "https://limetorrents.to",
+        "https://www.limetorrents.cyou",
+      ];
+      let html = "";
+      let limeError = null;
+      let limeBase = "";
+      for (const mirror of limeMirrors) {
+        try {
+          const searchUrl = `${mirror}/search/all/${q}/seeds/1/`;
+          html = await httpGetText(searchUrl, 25000);
+          limeBase = mirror;
+          limeError = null;
+          break;
+        } catch (e) {
+          const isCertError = e.message && (e.message.includes("certificate") || e.message.includes("self signed") || e.message.includes("local issuer certificate"));
+          if (isCertError && mirror.startsWith("https://")) {
+            try {
+              const httpMirror = mirror.replace("https://", "http://");
+              const searchUrl = `${httpMirror}/search/all/${q}/seeds/1/`;
+              html = await httpGetText(searchUrl, 25000);
+              limeBase = httpMirror;
+              limeError = null;
+              console.warn(`[RO^JO] LimeTorrents mirror ${mirror} HTTPS failed, using HTTP fallback`);
+              break;
+            } catch (httpErr) {
+              limeError = httpErr;
+              console.warn(`[RO^JO] LimeTorrents mirror ${mirror} failed (HTTPS + HTTP): ${httpErr.message}`);
+              continue;
+            }
+          }
+          limeError = e;
+          console.warn(`[RO^JO] LimeTorrents mirror ${mirror} failed: ${e.message}`);
+          continue;
+        }
+      }
+      if (limeError) {
+        throw new Error(`LimeTorrents is unreachable. Tried ${limeMirrors.length} mirrors. ${limeError.message}`);
+      }
+      const $ = cheerio.load(html);
+      const detailLinks = [];
+      $("table.table2 tr").each((_, row) => {
+        const cells = $(row).find("td");
+        if (cells.length < 5) return;
+        const linkEl = $(cells[0]).find('a[href$=".html"]').first();
+        const href = linkEl.attr("href");
+        if (!href) return;
+        const title = linkEl.text().trim() || "Unknown";
+        const sizeText = $(cells[2]).text().trim();
+        const seedsText = $(cells[3]).text().trim().replace(/,/g, "");
+        const peersText = $(cells[4]).text().trim().replace(/,/g, "");
+        detailLinks.push({
+          title,
+          size: sizeText,
+          seeds: parseInt(seedsText, 10) || 0,
+          peers: parseInt(peersText, 10) || 0,
+          detailUrl: new URL(href, limeBase).toString(),
+        });
+      });
+      // Limit detail-page fetches to avoid hammering the site
+      for (let i = 0; i < Math.min(detailLinks.length, 8); i++) {
+        const item = detailLinks[i];
+        try {
+          const detailHtml = await httpGetText(item.detailUrl, 20000);
+          const magnetMatch = detailHtml.match(/href\s*=\s*"(magnet:[^"]+)"/);
+          if (!magnetMatch) continue;
+          const infoHashMatch = magnetMatch[1].match(/urn:btih:([a-fA-F0-9]{40})/i);
+          if (!infoHashMatch) continue;
+          results.push({
+            title: item.title,
+            detail: "LimeTorrents",
+            size: item.size,
+            seeds: item.seeds,
+            peers: item.peers,
+            magnet: magnetMatch[1],
+            infoHash: infoHashMatch[1].toUpperCase(),
+          });
+        } catch (e) {
+          continue;
+        }
+      }
+    }
+
+    return { ok: true, results };
+  } catch (e) {
+    return { ok: false, error: e.message || "Search failed" };
+  }
 });
 
 ipcMain.handle("add-file", async (_event, arrayBuffer) => {
@@ -2625,8 +3154,12 @@ if os.path.exists(app_path):
     if result.returncode != 0:
         errors.append("lsregister failed: " + result.stderr.decode("utf-8", "ignore")[:200])
 
-# Build handler entries for .torrent extension and UTI
+# Build handler entries for magnet URL scheme, .torrent extension and UTI
 handlers = [
+    {
+        "LSHandlerURLScheme": "magnet",
+        "LSHandlerRoleAll": "com.rojo.torrent"
+    },
     {
         "LSHandlerContentTag": "torrent",
         "LSHandlerContentTagClass": "public.filename-extension",
@@ -2652,8 +3185,10 @@ for plist_path in plist_paths:
         else:
             plist = {"LSHandlers": []}
 
-        # Remove existing .torrent handlers (by extension or UTI)
+        # Remove existing magnet and .torrent handlers (by other apps)
         def is_torrent_handler(h):
+            if h.get("LSHandlerURLScheme") == "magnet":
+                return True
             if h.get("LSHandlerContentTag") == "torrent" and h.get("LSHandlerContentTagClass") == "public.filename-extension":
                 return True
             if h.get("LSHandlerContentType") == "org.bittorrent.torrent":
@@ -3292,8 +3827,7 @@ ipcMain.handle("speed-test", async () => {
   }
 });
 
-// Confirm file selection from torrent file picker
-ipcMain.handle("confirm-file-selection", async (_evt, infoHash, selectedIndices) => {
+async function commitFileSelection(infoHash, selectedIndices) {
   const pending = pendingFileSelection.get(infoHash);
   if (!pending) return { ok: false, error: "Torrent no longer pending" };
 
@@ -3337,6 +3871,7 @@ ipcMain.handle("confirm-file-selection", async (_evt, infoHash, selectedIndices)
           name: pending.displayName || t.name,
           magnetUri: pending.magnetUri || `magnet:?xt=urn:btih:${infoHash}`,
           infoHash: infoHash,
+          path: actualPath,
           addedAt: Date.now(),
         });
 
@@ -3382,7 +3917,30 @@ ipcMain.handle("confirm-file-selection", async (_evt, infoHash, selectedIndices)
       }
     }
   });
+}
+
+// Confirm file selection from torrent file picker
+ipcMain.handle("confirm-file-selection", async (_evt, infoHash, selectedIndices) => {
+  return commitFileSelection(infoHash, selectedIndices);
 });
+
+// Auto-move files from temp folder when a pending torrent completes without user confirmation
+function autoConfirmPendingOnComplete(torrent) {
+  if (!pendingFileSelection.has(torrent.infoHash)) return;
+  const selectedIndices = torrent.files.map((_, i) => i);
+  console.log(`[RO^JO] Auto-confirming completed pending torrent ${torrent.infoHash} with ${selectedIndices.length} files`);
+  commitFileSelection(torrent.infoHash, selectedIndices).then((result) => {
+    if (result.ok) {
+      broadcast("show-toast", { message: `Moved "${torrent.name}" to Downloads`, type: "info" });
+    } else {
+      console.warn("[RO^JO] Auto-confirm failed:", result.error);
+      broadcast("show-toast", { message: `"${torrent.name}" downloaded to temp folder. Open it from the app to move files.`, type: "warning" });
+    }
+  }).catch((err) => {
+    console.error("[RO^JO] Auto-confirm error:", err);
+    broadcast("show-toast", { message: `"${torrent.name}" downloaded to temp folder. Open it from the app to move files.`, type: "warning" });
+  });
+}
 
 // Cancel file selection and remove torrent
 ipcMain.handle("cancel-file-selection", async (_evt, infoHash) => {

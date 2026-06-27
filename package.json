@@ -46,14 +46,26 @@
       "icon": "assets/icon.icns",
       "mergeASARs": false,
       "extendInfo": {
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLName": "BitTorrent Magnet Link",
+            "CFBundleURLSchemes": [
+              "magnet"
+            ]
+          }
+        ],
         "CFBundleDocumentTypes": [
           {
-            "CFBundleTypeExtensions": ["torrent"],
+            "CFBundleTypeExtensions": [
+              "torrent"
+            ],
             "CFBundleTypeIconFile": "icon.icns",
             "CFBundleTypeName": "Torrent File",
             "CFBundleTypeRole": "Editor",
             "LSHandlerRank": "Default",
-            "LSItemContentTypes": ["org.bittorrent.torrent"]
+            "LSItemContentTypes": [
+              "org.bittorrent.torrent"
+            ]
           }
         ],
         "UTImportedTypeDeclarations": [
@@ -61,9 +73,13 @@
             "UTTypeIdentifier": "org.bittorrent.torrent",
             "UTTypeDescription": "Torrent File",
             "UTTypeIconFile": "icon.icns",
-            "UTTypeConformsTo": ["public.data"],
+            "UTTypeConformsTo": [
+              "public.data"
+            ],
             "UTTypeTagSpecification": {
-              "public.filename-extension": ["torrent"]
+              "public.filename-extension": [
+                "torrent"
+              ]
             }
           }
         ]
@@ -96,6 +112,7 @@
   },
   "dependencies": {
     "basic-ftp": "^6.0.1",
+    "cheerio": "^1.2.0",
     "ssh2": "^1.17.0",
     "webtorrent": "^2.4.29"
   },
