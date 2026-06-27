@@ -4384,77 +4384,256 @@ ipcMain.handle("ftp-list-remote", async (_event, dirPath) => {
   }
 });
 
-ipcMain.handle("ftp-upload", async (_event, localPath, remotePath) => {
-  if (!ftpConnected) return { ok: false, error: "Not connected" };
-  const transferId = "up_" + Date.now();
+function sftpStat(remotePath) {
+  return new Promise((resolve, reject) => {
+    sftpClient.stat(remotePath, (err, stats) => err ? reject(err) : resolve(stats));
+  });
+}
+
+function sftpReaddir(remoteDir) {
+  return new Promise((resolve, reject) => {
+    sftpClient.readdir(remoteDir, (err, items) => err ? reject(err) : resolve(items));
+  });
+}
+
+function sftpMkdir(remoteDir) {
+  return new Promise((resolve) => {
+    sftpClient.mkdir(remoteDir, { mode: 0o755 }, (err) => {
+      if (err) {
+        const msg = (err.message || "").toLowerCase();
+        const okCodes = [4, 11]; // SSH_FX_FAILURE (already exists) or SSH_FX_FILE_ALREADY_EXISTS
+        if (!okCodes.includes(err.code) && !msg.includes("already exists") && !msg.includes("file exists")) {
+          console.warn("[RO^JO] SFTP mkdir warning:", err.message);
+        }
+      }
+      resolve();
+    });
+  });
+}
+
+async function sftpEnsureDir(remoteDir) {
+  if (!remoteDir || remoteDir === "/" || remoteDir === ".") return;
+  const parent = path.posix.dirname(remoteDir);
+  if (parent && parent !== remoteDir) await sftpEnsureDir(parent);
+  await sftpMkdir(remoteDir);
+}
+
+async function ftpUploadFile(localPath, remotePath, transferId) {
   const fileName = path.basename(localPath);
   const totalSize = fs.statSync(localPath).size;
 
-  try {
-    if (ftpMode === "sftp") {
-      // SFTP upload with progress via write stream
-      const rs = fs.createReadStream(localPath);
-      const ws = sftpClient.createWriteStream(remotePath);
-      let uploaded = 0;
-      let lastReport = 0;
-      rs.on("data", (chunk) => {
-        uploaded += chunk.length;
-        const now = Date.now();
-        if (now - lastReport > 200) {
-          lastReport = now;
-          if (win && !win.isDestroyed()) {
-            win.webContents.send("ftp-transfer-progress", {
-              id: transferId, name: fileName, direction: "upload",
-              bytes: uploaded, total: totalSize,
-            });
-          }
+  if (ftpMode === "sftp") {
+    await sftpEnsureDir(path.posix.dirname(remotePath));
+    const rs = fs.createReadStream(localPath);
+    const ws = sftpClient.createWriteStream(remotePath);
+    let uploaded = 0;
+    let lastReport = 0;
+    rs.on("data", (chunk) => {
+      uploaded += chunk.length;
+      const now = Date.now();
+      if (now - lastReport > 200) {
+        lastReport = now;
+        if (win && !win.isDestroyed()) {
+          win.webContents.send("ftp-transfer-progress", {
+            id: transferId, name: fileName, direction: "upload",
+            bytes: uploaded, total: totalSize,
+          });
+        }
+      }
+    });
+    await new Promise((resolve, reject) => {
+      rs.pipe(ws);
+      ws.on("close", () => {
+        if (win && !win.isDestroyed()) {
+          win.webContents.send("ftp-transfer-progress", {
+            id: transferId, name: fileName, direction: "upload",
+            bytes: totalSize, total: totalSize,
+          });
+        }
+        resolve();
+      });
+      ws.on("error", reject);
+      ws.on("finish", () => {
+        if (win && !win.isDestroyed()) {
+          win.webContents.send("ftp-transfer-progress", {
+            id: transferId, name: fileName, direction: "upload",
+            bytes: totalSize, total: totalSize,
+          });
         }
       });
-      await new Promise((resolve, reject) => {
-        rs.pipe(ws);
-        ws.on("finish", () => {
-          if (win && !win.isDestroyed()) {
-            win.webContents.send("ftp-transfer-progress", {
-              id: transferId, name: fileName, direction: "upload",
-              bytes: totalSize, total: totalSize,
-            });
-          }
-          resolve();
-        });
-        ws.on("error", reject);
-        rs.on("error", reject);
-      });
-    } else {
-      // FTP/FTPS upload with progress
-      let lastReport = 0;
-      ftpClient.trackProgress(info => {
-        const now = Date.now();
-        if (now - lastReport > 200) {
-          lastReport = now;
-          if (win && !win.isDestroyed()) {
-            win.webContents.send("ftp-transfer-progress", {
-              id: transferId, name: fileName, direction: "upload",
-              bytes: info.bytes, total: totalSize,
-            });
-          }
+      rs.on("error", reject);
+    });
+    await new Promise(r => setTimeout(r, 100));
+  } else {
+    const remoteDir = path.posix.dirname(remotePath);
+    await ftpClient.ensureDir(remoteDir);
+    let lastReport = 0;
+    ftpClient.trackProgress(info => {
+      const now = Date.now();
+      if (now - lastReport > 200) {
+        lastReport = now;
+        if (win && !win.isDestroyed()) {
+          win.webContents.send("ftp-transfer-progress", {
+            id: transferId, name: fileName, direction: "upload",
+            bytes: info.bytes, total: totalSize,
+          });
         }
-      });
-      await ftpClient.uploadFrom(localPath, remotePath);
+      }
+    });
+    try {
+      await ftpClient.uploadFrom(localPath, path.basename(remotePath));
+    } finally {
       ftpClient.trackProgress(undefined);
     }
+  }
 
-    if (win && !win.isDestroyed()) {
-      win.webContents.send("ftp-transfer-done", { id: transferId, name: fileName, direction: "upload", success: true });
+  if (win && !win.isDestroyed()) {
+    win.webContents.send("ftp-transfer-done", { id: transferId, name: fileName, direction: "upload", success: true });
+  }
+}
+
+async function ftpDownloadFile(remotePath, localPath, transferId) {
+  const fileName = path.basename(remotePath);
+  fs.mkdirSync(path.dirname(localPath), { recursive: true });
+
+  if (ftpMode === "sftp") {
+    let totalSize = 0;
+    try {
+      const stat = await sftpStat(remotePath);
+      totalSize = stat.size || 0;
+    } catch (e) {}
+
+    const ws = fs.createWriteStream(localPath);
+    let downloaded = 0;
+    let lastReport = 0;
+    await new Promise((resolve, reject) => {
+      const rs = sftpClient.createReadStream(remotePath);
+      rs.on("data", (chunk) => {
+        downloaded += chunk.length;
+        const now = Date.now();
+        if (now - lastReport > 200) {
+          lastReport = now;
+          if (win && !win.isDestroyed()) {
+            win.webContents.send("ftp-transfer-progress", {
+              id: transferId, name: fileName, direction: "download",
+              bytes: downloaded, total: totalSize,
+            });
+          }
+        }
+      });
+      rs.on("error", reject);
+      ws.on("error", reject);
+      ws.on("finish", resolve);
+      rs.pipe(ws);
+    });
+  } else {
+    const remoteDir = path.posix.dirname(remotePath);
+    await ftpClient.cd(remoteDir);
+    let totalSize = 0;
+    try {
+      totalSize = await ftpClient.size(path.basename(remotePath)) || 0;
+    } catch (e) {}
+
+    let lastReport = 0;
+    ftpClient.trackProgress(info => {
+      const now = Date.now();
+      if (now - lastReport > 200) {
+        lastReport = now;
+        if (win && !win.isDestroyed()) {
+          win.webContents.send("ftp-transfer-progress", {
+            id: transferId, name: fileName, direction: "download",
+            bytes: info.bytes, total: totalSize,
+          });
+        }
+      }
+    });
+    try {
+      await ftpClient.downloadTo(localPath, path.basename(remotePath));
+    } finally {
+      ftpClient.trackProgress(undefined);
     }
+  }
+
+  if (win && !win.isDestroyed()) {
+    win.webContents.send("ftp-transfer-done", { id: transferId, name: fileName, direction: "download", success: true });
+  }
+}
+
+async function buildLocalUploadTransfers(localPath, remotePath) {
+  const transfers = [];
+  const stat = fs.statSync(localPath);
+  if (stat.isDirectory()) {
+    const entries = fs.readdirSync(localPath, { withFileTypes: true });
+    for (const e of entries) {
+      const childLocal = path.join(localPath, e.name);
+      const childRemote = path.posix.join(remotePath, e.name);
+      if (e.isDirectory()) {
+        const childTransfers = await buildLocalUploadTransfers(childLocal, childRemote);
+        transfers.push(...childTransfers);
+      } else {
+        transfers.push({ localPath: childLocal, remotePath: childRemote });
+      }
+    }
+  } else {
+    transfers.push({ localPath, remotePath });
+  }
+  return transfers;
+}
+
+async function buildRemoteDownloadTransfers(remotePath, localPath) {
+  const transfers = [];
+  if (ftpMode === "sftp") {
+    const stat = await sftpStat(remotePath);
+    const isDir = (stat.mode & 0o170000) === 0o040000;
+    if (isDir) {
+      const items = await sftpReaddir(remotePath);
+      for (const item of items) {
+        const childRemote = path.posix.join(remotePath, item.filename);
+        const childLocal = path.join(localPath, item.filename);
+        if ((item.attrs.mode & 0o170000) === 0o040000) {
+          const childTransfers = await buildRemoteDownloadTransfers(childRemote, childLocal);
+          transfers.push(...childTransfers);
+        } else {
+          transfers.push({ remotePath: childRemote, localPath: childLocal });
+        }
+      }
+    } else {
+      transfers.push({ remotePath, localPath });
+    }
+  } else {
+    try {
+      await ftpClient.size(remotePath);
+      transfers.push({ remotePath, localPath });
+    } catch (e) {
+      const items = await ftpClient.list(remotePath);
+      for (const item of items) {
+        const childRemote = path.posix.join(remotePath, item.name);
+        const childLocal = path.join(localPath, item.name);
+        if (item.isDirectory) {
+          const childTransfers = await buildRemoteDownloadTransfers(childRemote, childLocal);
+          transfers.push(...childTransfers);
+        } else {
+          transfers.push({ remotePath: childRemote, localPath: childLocal });
+        }
+      }
+    }
+  }
+  return transfers;
+}
+
+ipcMain.handle("ftp-upload", async (_event, localPath, remotePath) => {
+  if (!ftpConnected) return { ok: false, error: "Not connected" };
+  const transferId = "up_" + Date.now();
+  try {
+    await ftpUploadFile(localPath, remotePath, transferId);
     return { ok: true };
   } catch (e) {
-    if (ftpClient) ftpClient.trackProgress(undefined);
     let errorText = e.message || "Upload failed";
     if (errorText.toLowerCase().includes("permission denied") || errorText.toLowerCase().includes("eacces") || errorText.toLowerCase().includes("noperm")) {
       errorText = "Permission denied on remote folder. Choose a writable directory or check SFTP user rights.";
     }
     if (win && !win.isDestroyed()) {
-      win.webContents.send("ftp-transfer-done", { id: transferId, name: fileName, direction: "upload", success: false, error: errorText });
+      win.webContents.send("ftp-transfer-done", { id: transferId, name: path.basename(localPath), direction: "upload", success: false, error: errorText });
     }
     return { ok: false, error: errorText };
   }
@@ -4463,77 +4642,80 @@ ipcMain.handle("ftp-upload", async (_event, localPath, remotePath) => {
 ipcMain.handle("ftp-download", async (_event, remotePath, localPath) => {
   if (!ftpConnected) return { ok: false, error: "Not connected" };
   const transferId = "dl_" + Date.now();
-  const fileName = path.basename(remotePath);
-
   try {
-    if (ftpMode === "sftp") {
-      // SFTP download with progress
-      let totalSize = 0;
-      try {
-        const stat = await new Promise((resolve, reject) => {
-          sftpClient.stat(remotePath, (err, stats) => err ? reject(err) : resolve(stats));
-        });
-        totalSize = stat.size || 0;
-      } catch (e) {}
-
-      const ws = fs.createWriteStream(localPath);
-      let downloaded = 0;
-      let lastReport = 0;
-      await new Promise((resolve, reject) => {
-        const rs = sftpClient.createReadStream(remotePath);
-        rs.on("data", (chunk) => {
-          downloaded += chunk.length;
-          const now = Date.now();
-          if (now - lastReport > 200) {
-            lastReport = now;
-            if (win && !win.isDestroyed()) {
-              win.webContents.send("ftp-transfer-progress", {
-                id: transferId, name: fileName, direction: "download",
-                bytes: downloaded, total: totalSize,
-              });
-            }
-          }
-        });
-        rs.on("error", reject);
-        ws.on("error", reject);
-        ws.on("finish", resolve);
-        rs.pipe(ws);
-      });
-    } else {
-      // FTP/FTPS download with progress
-      let totalSize = 0;
-      try {
-        totalSize = await ftpClient.size(remotePath) || 0;
-      } catch (e) {}
-
-      let lastReport = 0;
-      ftpClient.trackProgress(info => {
-        const now = Date.now();
-        if (now - lastReport > 200) {
-          lastReport = now;
-          if (win && !win.isDestroyed()) {
-            win.webContents.send("ftp-transfer-progress", {
-              id: transferId, name: fileName, direction: "download",
-              bytes: info.bytes, total: totalSize,
-            });
-          }
-        }
-      });
-      await ftpClient.downloadTo(localPath, remotePath);
-      ftpClient.trackProgress(undefined);
-    }
-
-    if (win && !win.isDestroyed()) {
-      win.webContents.send("ftp-transfer-done", { id: transferId, name: fileName, direction: "download", success: true });
-    }
+    await ftpDownloadFile(remotePath, localPath, transferId);
     return { ok: true };
   } catch (e) {
-    if (ftpClient) ftpClient.trackProgress(undefined);
     if (win && !win.isDestroyed()) {
-      win.webContents.send("ftp-transfer-done", { id: transferId, name: fileName, direction: "download", success: false, error: e.message });
+      win.webContents.send("ftp-transfer-done", { id: transferId, name: path.basename(remotePath), direction: "download", success: false, error: e.message });
     }
     return { ok: false, error: e.message };
   }
+});
+
+ipcMain.handle("ftp-upload-batch", async (_event, transfers) => {
+  if (!ftpConnected) return { ok: false, error: "Not connected" };
+  console.log("[RO^JO FTP] Batch upload received", transfers.length, "top-level transfers, mode:", ftpMode);
+  let filesTransferred = 0;
+  const errors = [];
+  for (let i = 0; i < transfers.length; i++) {
+    const t = transfers[i];
+    let fileTransfers = [];
+    try {
+      fileTransfers = await buildLocalUploadTransfers(t.localPath, t.remotePath);
+    } catch (e) {
+      errors.push(`${path.basename(t.localPath)}: ${e.message}`);
+      console.error("[RO^JO] Batch upload list error:", e.message);
+      continue;
+    }
+    console.log("[RO^JO FTP] Top-level", i, path.basename(t.localPath), "expanded to", fileTransfers.length, "files");
+    for (let j = 0; j < fileTransfers.length; j++) {
+      const ft = fileTransfers[j];
+      const transferId = "up_" + Date.now() + "_" + i + "_" + j;
+      console.log("[RO^JO FTP] Uploading", ft.localPath, "->", ft.remotePath);
+      try {
+        await ftpUploadFile(ft.localPath, ft.remotePath, transferId);
+        filesTransferred++;
+        console.log("[RO^JO FTP] Upload success", ft.remotePath);
+      } catch (e) {
+        errors.push(`${path.basename(ft.localPath)}: ${e.message}`);
+        console.error("[RO^JO FTP] Batch upload file error:", e.message);
+      }
+    }
+  }
+  console.log("[RO^JO FTP] Batch upload done. Transferred:", filesTransferred, "Errors:", errors);
+  const ok = errors.length === 0;
+  return { ok, filesTransferred, error: ok ? undefined : errors.join("; ") };
+});
+
+ipcMain.handle("ftp-download-batch", async (_event, transfers) => {
+  if (!ftpConnected) return { ok: false, error: "Not connected" };
+  let filesTransferred = 0;
+  const errors = [];
+  for (let i = 0; i < transfers.length; i++) {
+    const t = transfers[i];
+    let fileTransfers = [];
+    try {
+      fileTransfers = await buildRemoteDownloadTransfers(t.remotePath, t.localPath);
+    } catch (e) {
+      errors.push(`${path.basename(t.remotePath)}: ${e.message}`);
+      console.error("[RO^JO] Batch download list error:", e.message);
+      continue;
+    }
+    for (let j = 0; j < fileTransfers.length; j++) {
+      const ft = fileTransfers[j];
+      const transferId = "dl_" + Date.now() + "_" + i + "_" + j;
+      try {
+        await ftpDownloadFile(ft.remotePath, ft.localPath, transferId);
+        filesTransferred++;
+      } catch (e) {
+        errors.push(`${path.basename(ft.remotePath)}: ${e.message}`);
+        console.error("[RO^JO] Batch download file error:", e.message);
+      }
+    }
+  }
+  const ok = errors.length === 0;
+  return { ok, filesTransferred, error: ok ? undefined : errors.join("; ") };
 });
 
 ipcMain.handle("ftp-chmod", async (_event, remotePath, mode) => {

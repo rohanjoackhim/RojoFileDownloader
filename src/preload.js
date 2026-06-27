@@ -79,6 +79,8 @@ contextBridge.exposeInMainWorld("rojoAPI", {
   ftpListRemote: (dirPath) => ipcRenderer.invoke("ftp-list-remote", dirPath),
   ftpUpload: (localPath, remotePath) => ipcRenderer.invoke("ftp-upload", localPath, remotePath),
   ftpDownload: (remotePath, localPath) => ipcRenderer.invoke("ftp-download", remotePath, localPath),
+  ftpUploadBatch: (transfers) => ipcRenderer.invoke("ftp-upload-batch", transfers),
+  ftpDownloadBatch: (transfers) => ipcRenderer.invoke("ftp-download-batch", transfers),
   ftpSaveCreds: (host, port, user, pass, mode) => ipcRenderer.invoke("ftp-save-creds", host, port, user, pass, mode),
   ftpLoadCreds: (user) => ipcRenderer.invoke("ftp-load-creds", user),
   ftpGetSavedUsers: () => ipcRenderer.invoke("ftp-get-saved-users"),

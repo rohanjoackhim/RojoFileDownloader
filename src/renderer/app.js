@@ -1699,8 +1699,8 @@ setInterval(checkInternet, 10000);
 let ftpMode = false;
 let ftpLocalCwd = null;
 let ftpRemoteCwd = null;
-let ftpLocalSelected = null;
-let ftpRemoteSelected = null;
+let ftpLocalSelected = [];
+let ftpRemoteSelected = [];
 const ftpTransfers = new Map();
 
 async function toggleFtpMode() {
@@ -1729,9 +1729,12 @@ let ftpContextMenuTarget = null;
 function renderFtpList(containerId, items, isLocal) {
   const container = $(containerId);
   container.innerHTML = "";
+  const selected = isLocal ? ftpLocalSelected : ftpRemoteSelected;
   for (const item of items) {
     const el = document.createElement("div");
     el.className = "ftp-file-item";
+    const isSelected = selected.some(s => s.path === item.path);
+    if (isSelected) el.classList.add("selected");
     const icon = item.isDirectory
       ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`
       : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>`;
@@ -1739,8 +1742,13 @@ function renderFtpList(containerId, items, isLocal) {
       ? new Date(item.date).toLocaleString([], { month: "short", day: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })
       : "";
     const permsText = item.permissions || "";
-    el.innerHTML = `<span class="ftp-file-icon">${icon}</span><span class="ftp-file-name">${escapeHtml(item.name)}</span><span class="ftp-file-size">${item.isDirectory ? "" : formatBytes(item.size)}</span><span class="ftp-file-date">${dateText}</span><span class="ftp-file-perms">${permsText}</span>`;
+    el.innerHTML = `<input type="checkbox" class="ftp-file-checkbox" ${isSelected ? "checked" : ""}><span class="ftp-file-icon">${icon}</span><span class="ftp-file-name">${escapeHtml(item.name)}</span><span class="ftp-file-size">${item.isDirectory ? "" : formatBytes(item.size)}</span><span class="ftp-file-date">${dateText}</span><span class="ftp-file-perms">${permsText}</span>`;
     el.title = `${item.name}  •  ${item.isDirectory ? "Directory" : formatBytes(item.size)}  •  ${dateText || "No date"}  •  ${permsText || "No permissions"}`;
+    const checkbox = el.querySelector(".ftp-file-checkbox");
+    checkbox.addEventListener("change", (e) => {
+      e.stopPropagation();
+      toggleFtpSelection(item, isLocal);
+    });
     el.addEventListener("contextmenu", (e) => {
       if (!isLocal) {
         e.preventDefault();
@@ -1748,18 +1756,10 @@ function renderFtpList(containerId, items, isLocal) {
         showFtpContextMenu(e.clientX, e.clientY);
       }
     });
-    el.addEventListener("click", () => {
-      if (isLocal) {
-        ftpLocalSelected = item;
-        container.querySelectorAll(".ftp-file-item").forEach(e => e.classList.remove("selected"));
-        el.classList.add("selected");
-        $("btnFtpUpload").disabled = item.isDirectory;
-      } else {
-        ftpRemoteSelected = item;
-        container.querySelectorAll(".ftp-file-item").forEach(e => e.classList.remove("selected"));
-        el.classList.add("selected");
-        $("btnFtpDownload").disabled = item.isDirectory;
-      }
+    el.addEventListener("click", (e) => {
+      if (e.target.classList.contains("ftp-file-checkbox")) return;
+      checkbox.checked = !checkbox.checked;
+      toggleFtpSelection(item, isLocal);
     });
     if (item.isDirectory) {
       el.addEventListener("dblclick", () => {
@@ -1772,16 +1772,60 @@ function renderFtpList(containerId, items, isLocal) {
     }
     container.appendChild(el);
   }
+  updateFtpSelectAllButtons();
+}
+
+function toggleFtpSelection(item, isLocal) {
+  const selected = isLocal ? ftpLocalSelected : ftpRemoteSelected;
+  const idx = selected.findIndex(s => s.path === item.path);
+  if (idx >= 0) {
+    selected.splice(idx, 1);
+  } else {
+    selected.push(item);
+  }
+  renderFtpList(isLocal ? "ftpLocalList" : "ftpRemoteList", isLocal ? lastFtpLocalItems : lastFtpRemoteItems, isLocal);
+  updateFtpTransferButtons();
+}
+
+let lastFtpLocalItems = [];
+let lastFtpRemoteItems = [];
+
+function updateFtpSelectAllButtons() {
+  const localCount = ftpLocalSelected.length;
+  const remoteCount = ftpRemoteSelected.length;
+  const localItems = lastFtpLocalItems.length;
+  const remoteItems = lastFtpRemoteItems.length;
+  $("btnFtpLocalSelectAll").textContent = localCount === localItems && localItems > 0 ? `Select None (${localCount})` : `Select All${localCount > 0 ? ` (${localCount})` : ""}`;
+  $("btnFtpRemoteSelectAll").textContent = remoteCount === remoteItems && remoteItems > 0 ? `Select None (${remoteCount})` : `Select All${remoteCount > 0 ? ` (${remoteCount})` : ""}`;
+}
+
+function updateFtpTransferButtons() {
+  $("btnFtpUpload").disabled = ftpLocalSelected.length === 0;
+  $("btnFtpDownload").disabled = ftpRemoteSelected.length === 0;
+}
+
+function ftpSelectAll(isLocal) {
+  const items = isLocal ? lastFtpLocalItems : lastFtpRemoteItems;
+  const selected = isLocal ? ftpLocalSelected : ftpRemoteSelected;
+  if (selected.length === items.length) {
+    selected.length = 0;
+  } else {
+    selected.length = 0;
+    for (const item of items) selected.push(item);
+  }
+  renderFtpList(isLocal ? "ftpLocalList" : "ftpRemoteList", items, isLocal);
+  updateFtpTransferButtons();
 }
 
 async function loadFtpLocal(dirPath) {
   const res = await rojoAPI.ftpListLocal(dirPath);
   if (res.ok) {
     ftpLocalCwd = res.cwd;
-    ftpLocalSelected = null;
+    ftpLocalSelected = [];
+    lastFtpLocalItems = res.items || [];
     $("btnFtpUpload").disabled = true;
     $("ftpLocalPath").textContent = res.cwd;
-    renderFtpList("ftpLocalList", res.items, true);
+    renderFtpList("ftpLocalList", lastFtpLocalItems, true);
   } else {
     $("ftpLocalPath").textContent = "Error: " + res.error;
   }
@@ -1791,10 +1835,11 @@ async function loadFtpRemote(dirPath) {
   const res = await rojoAPI.ftpListRemote(dirPath);
   if (res.ok) {
     ftpRemoteCwd = res.cwd;
-    ftpRemoteSelected = null;
+    ftpRemoteSelected = [];
+    lastFtpRemoteItems = res.items || [];
     $("btnFtpDownload").disabled = true;
     $("ftpRemotePath").textContent = res.cwd;
-    renderFtpList("ftpRemoteList", res.items, false);
+    renderFtpList("ftpRemoteList", lastFtpRemoteItems, false);
   } else {
     $("ftpRemotePath").textContent = "Error: " + res.error;
   }
@@ -2017,8 +2062,10 @@ async function ftpDisconnect() {
   $("ftpRemoteList").innerHTML = "";
   $("ftpRemotePath").textContent = "";
   ftpRemoteCwd = null;
-  ftpRemoteSelected = null;
+  ftpRemoteSelected = [];
+  lastFtpRemoteItems = [];
   $("btnFtpDownload").disabled = true;
+  updateFtpSelectAllButtons();
   // Re-load last successful login so the form is ready for reconnect
   await loadFtpLastLogin();
 }
@@ -2038,30 +2085,44 @@ async function ftpRemoteUp() {
 }
 
 async function ftpUpload() {
-  if (!ftpLocalSelected || ftpLocalSelected.isDirectory) return;
-  const remoteTarget = ftpRemoteCwd
-    ? (ftpRemoteCwd.endsWith("/") ? ftpRemoteCwd : ftpRemoteCwd + "/") + ftpLocalSelected.name
-    : ftpLocalSelected.name;
-  const res = await rojoAPI.ftpUpload(ftpLocalSelected.path, remoteTarget);
-  if (res.ok) {
-    showToast("Upload complete: " + ftpLocalSelected.name);
+  if (ftpLocalSelected.length === 0) return;
+  if (!ftpRemoteCwd) { showToast("Connect and open a remote folder first", "error"); return; }
+  const transfers = ftpLocalSelected.map(item => ({
+    localPath: item.path,
+    remotePath: (ftpRemoteCwd.endsWith("/") ? ftpRemoteCwd : ftpRemoteCwd + "/") + item.name
+  }));
+  console.log("[RO^JO FTP] Upload selected:", ftpLocalSelected.length, "transfers:", transfers);
+  $("btnFtpUpload").disabled = true;
+  const res = await rojoAPI.ftpUploadBatch(transfers);
+  $("btnFtpUpload").disabled = false;
+  console.log("[RO^JO FTP] Upload result:", res);
+  if (res.filesTransferred > 0) {
     loadFtpRemote(ftpRemoteCwd);
+  }
+  if (res.ok) {
+    showToast(`Upload complete (${res.filesTransferred} items)`);
   } else {
-    showToast("Upload failed: " + res.error, "error");
+    showToast(`Upload finished with errors: ${res.error || "Unknown error"}`, "error");
   }
 }
 
 async function ftpDownload() {
-  if (!ftpRemoteSelected || ftpRemoteSelected.isDirectory) return;
-  const localTarget = ftpLocalCwd
-    ? ftpLocalCwd + "/" + ftpRemoteSelected.name
-    : ftpRemoteSelected.name;
-  const res = await rojoAPI.ftpDownload(ftpRemoteSelected.path, localTarget);
-  if (res.ok) {
-    showToast("Download complete: " + ftpRemoteSelected.name);
+  if (ftpRemoteSelected.length === 0) return;
+  if (!ftpLocalCwd) { showToast("Open a local folder first", "error"); return; }
+  const transfers = ftpRemoteSelected.map(item => ({
+    remotePath: item.path,
+    localPath: ftpLocalCwd + "/" + item.name
+  }));
+  $("btnFtpDownload").disabled = true;
+  const res = await rojoAPI.ftpDownloadBatch(transfers);
+  $("btnFtpDownload").disabled = false;
+  if (res.filesTransferred > 0) {
     loadFtpLocal(ftpLocalCwd);
+  }
+  if (res.ok) {
+    showToast(`Download complete (${res.filesTransferred} items)`);
   } else {
-    showToast("Download failed: " + res.error, "error");
+    showToast(`Download finished with errors: ${res.error || "Unknown error"}`, "error");
   }
 }
 
@@ -2327,8 +2388,10 @@ $("ftpSavedAccounts").addEventListener("change", onFtpSavedAccountChange);
 $("btnFtpDeleteAccount").addEventListener("click", onFtpDeleteAccount);
 $("btnFtpLocalUp").addEventListener("click", ftpLocalUp);
 $("btnFtpLocalRefresh").addEventListener("click", () => loadFtpLocal(ftpLocalCwd));
+$("btnFtpLocalSelectAll").addEventListener("click", () => ftpSelectAll(true));
 $("btnFtpRemoteUp").addEventListener("click", ftpRemoteUp);
 $("btnFtpRemoteRefresh").addEventListener("click", () => loadFtpRemote(ftpRemoteCwd));
+$("btnFtpRemoteSelectAll").addEventListener("click", () => ftpSelectAll(false));
 $("btnFtpUpload").addEventListener("click", ftpUpload);
 $("btnFtpDownload").addEventListener("click", ftpDownload);
 $("btnFtpClearTransfers").addEventListener("click", clearFtpTransfers);

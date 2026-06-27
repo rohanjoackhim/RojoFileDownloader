@@ -1786,6 +1786,14 @@ html, body {
   background: rgba(255,77,141,0.15);
 }
 
+.ftp-file-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 .ftp-file-icon {
   width: 16px;
   height: 16px;
