@@ -2064,6 +2064,13 @@ html, body {
   text-overflow: ellipsis;
 }
 
+.ftp-transfer-size {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .ftp-transfer-bar-fill {
   width: 120px;
   height: 6px;

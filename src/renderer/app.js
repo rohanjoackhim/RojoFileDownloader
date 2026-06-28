@@ -2133,29 +2133,35 @@ function formatTransferTime(date) {
 function updateFtpTransferProgress(data) {
   let item = ftpTransfers.get(data.id);
   if (!item) {
-    item = { el: null, name: data.name, direction: data.direction, startTime: new Date() };
+    item = { el: null, name: data.name, direction: data.direction, startTime: new Date(), total: data.total || 0 };
+    const sizeText = data.total ? formatBytes(data.total) : "Unknown size";
     const listEl = $("ftpTransferList");
     const el = document.createElement("div");
     el.className = "ftp-transfer-item";
     el.innerHTML = `
       <div class="ftp-transfer-row">
         <span class="ftp-transfer-name">${escapeHtml(data.direction === "upload" ? "↑ " : "↓ ")}${escapeHtml(data.name)}</span>
+        <span class="ftp-transfer-size">${escapeHtml(sizeText)}</span>
         <div class="ftp-transfer-bar-fill"><div style="width:0%"></div></div>
         <span class="ftp-transfer-pct">0%</span>
       </div>
       <div class="ftp-transfer-meta">
         <span class="ftp-transfer-time">${formatTransferTime(item.startTime)}</span>
-        <span class="ftp-transfer-status">Transferring...</span>
+        <span class="ftp-transfer-status">Transferring... 0 B / ${sizeText}</span>
       </div>`;
     listEl.appendChild(el);
     item.el = el;
     ftpTransfers.set(data.id, item);
     scrollToBottom(listEl);
   }
-  const pct = data.total > 0 ? Math.round((data.bytes / data.total) * 100) : 0;
+  if (data.total && data.total > item.total) {
+    item.total = data.total;
+    item.el.querySelector(".ftp-transfer-size").textContent = formatBytes(data.total);
+  }
+  const pct = item.total > 0 ? Math.round((data.bytes / item.total) * 100) : 0;
   item.el.querySelector(".ftp-transfer-bar-fill > div").style.width = pct + "%";
   item.el.querySelector(".ftp-transfer-pct").textContent = pct + "%";
-  item.el.querySelector(".ftp-transfer-status").textContent = `Transferring... ${formatBytes(data.bytes)} / ${formatBytes(data.total)}`;
+  item.el.querySelector(".ftp-transfer-status").textContent = `Transferring... ${formatBytes(data.bytes)} / ${formatBytes(item.total)} (${pct}%)`;
   scrollToBottom($("ftpTransferList"));
 }
 
@@ -2164,15 +2170,16 @@ function markFtpTransferDone(data) {
   if (!item) return;
   const pctEl = item.el.querySelector(".ftp-transfer-pct");
   const statusEl = item.el.querySelector(".ftp-transfer-status");
+  const sizeText = item.total > 0 ? formatBytes(item.total) : "Unknown size";
   if (data.success) {
     pctEl.textContent = "Done";
     pctEl.className = "ftp-transfer-pct ftp-transfer-done";
     item.el.querySelector(".ftp-transfer-bar-fill > div").style.width = "100%";
-    statusEl.textContent = "Completed";
+    statusEl.textContent = `Completed (${sizeText})`;
   } else {
     pctEl.textContent = "Error";
     pctEl.className = "ftp-transfer-pct ftp-transfer-error";
-    statusEl.textContent = data.error || "Failed";
+    statusEl.textContent = `${data.error || "Failed"} (${formatBytes(data.bytes || 0)} / ${sizeText})`;
     statusEl.className = "ftp-transfer-status ftp-transfer-error";
   }
   // Keep the item in the log; do not auto-remove

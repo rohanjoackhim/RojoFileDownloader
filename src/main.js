@@ -1062,6 +1062,7 @@ let splash;
 let client;
 const activeTorrents = new Map();
 const pendingFileSelection = new Map(); // infoHash -> { torrent, displayName, downloadPath, magnetUri?, torrentFilePath? }
+const removingTorrents = new Set(); // infoHashes currently being removed from client
 let isMinimized = false;
 let isQuitting = false;
 let restartStatsLoop = null; // called when window is recreated after being closed
@@ -1175,6 +1176,12 @@ async function restoreTorrents() {
       const entry = list[i];
       if (!entry.infoHash) continue;
 
+      // Skip torrents stuck in file-picker state; user can re-add from history
+      if (entry.status === "selecting files") {
+        console.log(`[RO^JO] Skipping pending restore: ${entry.name}`);
+        continue;
+      }
+
       // Skip if already in client (duplicate protection)
       if (client.torrents.some(t => t.infoHash === entry.infoHash)) {
         console.log(`[RO^JO] Skipping duplicate restore: ${entry.name}`);
@@ -1182,17 +1189,23 @@ async function restoreTorrents() {
         continue;
       }
 
-      // Try to re-add to WebTorrent client; only add to activeTorrents on success
+      // Reset transient status before restore
+      const restoredEntry = { ...entry, status: entry.status === "completed" ? "completed" : "downloading" };
+
+      // Set activeTorrents before re-adding to client so the stats loop doesn't recreate it
+      activeTorrents.set(entry.infoHash, restoredEntry);
+
+      // Try to re-add to WebTorrent client
       if (entry.magnetUri) {
         try {
           client.add(entry.magnetUri, {
             path: entry.path ? path.dirname(entry.path) : DEFAULT_DOWNLOAD_DIR,
             announce: ROJO_CONFIG.announce,
           });
-          activeTorrents.set(entry.infoHash, entry);
           console.log(`[RO^JO] Re-added magnet torrent: ${entry.name}`);
         } catch (e) {
           console.error(`[RO^JO] Failed to re-add magnet torrent ${entry.name}:`, e.message);
+          activeTorrents.delete(entry.infoHash);
         }
       } else if (entry.torrentFilePath && fs.existsSync(entry.torrentFilePath)) {
         try {
@@ -1201,16 +1214,19 @@ async function restoreTorrents() {
             path: entry.path ? path.dirname(entry.path) : DEFAULT_DOWNLOAD_DIR,
             announce: ROJO_CONFIG.announce,
           });
-          activeTorrents.set(entry.infoHash, entry);
           console.log(`[RO^JO] Re-added .torrent file: ${entry.name}`);
         } catch (e) {
           console.error(`[RO^JO] Failed to re-add .torrent ${entry.name}:`, e.message);
+          activeTorrents.delete(entry.infoHash);
         }
+      } else {
+        // No magnet URI or .torrent file; remove from activeTorrents
+        activeTorrents.delete(entry.infoHash);
       }
 
-      // Stagger restores to avoid overwhelming the client (500ms between each)
+      // Stagger restores to avoid overwhelming the client (100ms between each)
       if (i < list.length - 1) {
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 100));
       }
     }
   } catch (e) {
@@ -1557,6 +1573,8 @@ async function initWebTorrent() {
         let torrentIdx = 0;
         for (const t of client.torrents) {
           torrentIdx++;
+          // Skip torrents that are currently being removed
+          if (removingTorrents.has(t.infoHash)) continue;
           // Yield event loop every 3 torrents to prevent tray/UI freeze
           if (torrentIdx % 3 === 0) {
             await new Promise(r => setImmediate(r));
@@ -1683,8 +1701,12 @@ async function initWebTorrent() {
           }
         }
 
-        // Log memory every 30 iterations
+        // Save torrent state periodically (every 5 iterations) to survive crashes/force-quit
         statsLoop.counter = (statsLoop.counter || 0) + 1;
+        if (statsLoop.counter % 5 === 0) {
+          saveTorrentsState();
+        }
+        // Log memory every 30 iterations
         if (statsLoop.counter % 30 === 0) {
           const mem = process.memoryUsage();
           console.log(`[RO^JO] mem rss=${(mem.rss/1048576).toFixed(1)}MB heap=${(mem.heapUsed/1048576).toFixed(1)}MB torrents=${client.torrents.length} vpn=${vpnState.active ? 'on' : 'off'}`);
@@ -1851,6 +1873,7 @@ async function handleAddMagnet(magnetUri) {
               actualTorrent.on("done", () => {
                 const entry = activeTorrents.get(actualTorrent.infoHash);
                 if (entry) entry.status = "completed";
+                saveTorrentsState();
                 broadcast("torrent-completed", { infoHash: actualTorrent.infoHash, name: entry ? entry.name : actualTorrent.name });
               });
 
@@ -1867,6 +1890,7 @@ async function handleAddMagnet(magnetUri) {
                 length: realLength,
                 magnetUri: magnetUri,
               });
+              saveTorrentsState();
               addTorrentToHistory({
                 name: displayName || realName,
                 magnetUri: magnetUri,
@@ -1898,6 +1922,7 @@ async function handleAddMagnet(magnetUri) {
             length: t.length || 0,
             magnetUri: magnetUri,
           });
+          saveTorrentsState();
           let fileList = buildFileList(t, displayName);
           if (!fileList) {
             setTimeout(async () => {
@@ -1950,6 +1975,7 @@ async function handleAddMagnet(magnetUri) {
       torrent.on("done", () => {
         const entry = activeTorrents.get(torrent.infoHash);
         if (entry) entry.status = "completed";
+        saveTorrentsState();
         autoConfirmPendingOnComplete(torrent);
         broadcast("torrent-completed", { infoHash: torrent.infoHash, name: entry ? entry.name : torrent.name });
       });
@@ -2069,6 +2095,7 @@ async function handleAddTorrentFile(buffer, downloadPath) {
               actualTorrent.on("done", () => {
                 const entry = activeTorrents.get(actualTorrent.infoHash);
                 if (entry) entry.status = "completed";
+                saveTorrentsState();
                 broadcast("torrent-completed", { infoHash: actualTorrent.infoHash, name: entry ? entry.name : actualTorrent.name });
               });
 
@@ -2085,6 +2112,7 @@ async function handleAddTorrentFile(buffer, downloadPath) {
                 length: realLength,
                 torrentFilePath: torrentFilePath,
               });
+              saveTorrentsState();
               addTorrentToHistory({
                 name: realName,
                 magnetUri: `magnet:?xt=urn:btih:${realInfoHash}`,
@@ -2117,6 +2145,7 @@ async function handleAddTorrentFile(buffer, downloadPath) {
             length: t.length || 0,
             torrentFilePath: torrentFilePath,
           });
+          saveTorrentsState();
           let fileList = buildFileList(t, t.name);
           if (!fileList) {
             setTimeout(async () => {
@@ -2170,6 +2199,7 @@ async function handleAddTorrentFile(buffer, downloadPath) {
       torrent.on("done", () => {
         const entry = activeTorrents.get(torrent.infoHash);
         if (entry) entry.status = "completed";
+        saveTorrentsState();
         autoConfirmPendingOnComplete(torrent);
         broadcast("torrent-completed", { infoHash: torrent.infoHash, name: entry ? entry.name : torrent.name });
       });
@@ -2188,19 +2218,35 @@ async function handleAddTorrentFile(buffer, downloadPath) {
 
 async function removeTorrent(infoHash, deleteFiles = false) {
   if (!client) return { ok: false, error: "Engine not ready" };
+  if (removingTorrents.has(infoHash)) return { ok: true };
+  removingTorrents.add(infoHash);
   const torrent = await client.get(infoHash);
   if (!torrent) {
     // Already gone from client; just clean up our map
     activeTorrents.delete(infoHash);
+    removingTorrents.delete(infoHash);
     saveTorrentsState();
     broadcast("torrent-removed", { infoHash });
     return { ok: true };
   }
 
-  // Don't wait for client.remove callback — it's unreliable and can hang.
-  // Clean up our own state immediately and return.
-  client.remove(torrent, { destroyStore: deleteFiles });
+  try {
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        // Force resolve if callback hangs; the client should still remove the torrent
+        resolve();
+      }, 5000);
+      client.remove(torrent, { destroyStore: deleteFiles }, (err) => {
+        clearTimeout(timeout);
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  } catch (e) {
+    console.error(`[RO^JO] Error removing torrent ${infoHash}:`, e.message);
+  }
   activeTorrents.delete(infoHash);
+  removingTorrents.delete(infoHash);
   saveTorrentsState();
   if (win && !win.isDestroyed()) {
     broadcast("torrent-removed", { infoHash });
@@ -2370,6 +2416,7 @@ async function pauseTorrent(infoHash) {
     entry._frozenUploaded = torrent.uploaded || 0;
     entry._frozenProgress = torrent.progress;
   }
+  saveTorrentsState();
   return { ok: true };
 }
 
@@ -2386,6 +2433,7 @@ async function resumeTorrent(infoHash) {
     delete entry._frozenUploaded;
     delete entry._frozenProgress;
   }
+  saveTorrentsState();
   return { ok: true };
 }
 
@@ -3867,6 +3915,7 @@ async function commitFileSelection(infoHash, selectedIndices) {
           magnetUri: pending.magnetUri,
           torrentFilePath: pending.torrentFilePath,
         });
+        saveTorrentsState();
         addTorrentToHistory({
           name: pending.displayName || t.name,
           magnetUri: pending.magnetUri || `magnet:?xt=urn:btih:${infoHash}`,
@@ -4748,45 +4797,50 @@ app.whenReady().then(async () => {
   createSplash();
 
   await initWebTorrent();
-  await restoreTorrents();
   loadHttpDownloadsState();
   loadScheduledDownloads();
   startScheduleChecker();
   await createWindow();
   createTray();
 
-  // Process any files/URLs that arrived before the app was ready
-  for (const filePath of pendingFiles) {
-    try {
-      handleAddTorrentFile(fs.readFileSync(filePath));
-    } catch (e) {
-      console.error(`[RO^JO] Failed to process pending .torrent file: ${e.message}`);
-    }
-  }
-  pendingFiles.length = 0;
+  // Restore torrents in the background so the splash/main window is not blocked.
+  // The renderer will receive updates as each torrent is re-added.
+  restoreTorrents().then(async () => {
+    console.log("[RO^JO] Background torrent restore complete");
 
-  for (const url of pendingUrls) {
-    try {
-      const result = await handleAddMagnet(url);
-      if (result.duplicate && win && !win.isDestroyed()) {
-        const { response } = await dialog.showMessageBox(win, {
-          type: "question",
-          buttons: ["Cancel", "Replace"],
-          defaultId: 1,
-          title: "Duplicate Torrent",
-          message: `"${result.name}" is already in your download list.`,
-          detail: "Do you want to remove the old one and add it again?",
-        });
-        if (response === 1) {
-          await removeTorrent(result.infoHash, true);
-          await handleAddMagnet(url);
-        }
+    // Process any files/URLs that arrived before the app was ready
+    for (const filePath of pendingFiles) {
+      try {
+        handleAddTorrentFile(fs.readFileSync(filePath));
+      } catch (e) {
+        console.error(`[RO^JO] Failed to process pending .torrent file: ${e.message}`);
       }
-    } catch (e) {
-      console.error("[RO^JO] Failed to process pending magnet URL:", e.message);
     }
-  }
-  pendingUrls.length = 0;
+    pendingFiles.length = 0;
+
+    for (const url of pendingUrls) {
+      try {
+        const result = await handleAddMagnet(url);
+        if (result.duplicate && win && !win.isDestroyed()) {
+          const { response } = await dialog.showMessageBox(win, {
+            type: "question",
+            buttons: ["Cancel", "Replace"],
+            defaultId: 1,
+            title: "Duplicate Torrent",
+            message: `"${result.name}" is already in your download list.`,
+            detail: "Do you want to remove the old one and add it again?",
+          });
+          if (response === 1) {
+            await removeTorrent(result.infoHash, true);
+            await handleAddMagnet(url);
+          }
+        }
+      } catch (e) {
+        console.error("[RO^JO] Failed to process pending magnet URL:", e.message);
+      }
+    }
+    pendingUrls.length = 0;
+  });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
